@@ -69,25 +69,27 @@ class DesktopAPI:
     """Functions the page can call through window.pywebview.api.*"""
 
     def __init__(self):
-        self.window = None
+        # Underscore keeps pywebview from walking into the window's .NET form when it builds the JS API,
+        # which reads WinForms properties off the UI thread and deadlocks the app at startup.
+        self._window = None
 
     def pick_files(self):
         import webview
         types = ("Everything Lorekeeper reads (*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.wmv;*.flv;*.ts;*.mp3;*.wav;"
                  "*.m4a;*.aac;*.flac;*.ogg;*.opus;*.jpg;*.jpeg;*.png;*.webp;*.gif;*.bmp;*.tif;*.tiff;*.pdf;*.docx;"
                  "*.pptx;*.txt;*.md;*.html;*.htm;*.csv;*.json;*.srt;*.vtt)", "All files (*.*)")
-        res = self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=types)
+        res = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=types)
         return list(res or [])
 
     def pick_models(self):
         import webview
-        res = self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
-                                             file_types=("GGUF models (*.gguf)", "All files (*.*)"))
+        res = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
+                                              file_types=("GGUF models (*.gguf)", "All files (*.*)"))
         return list(res or [])
 
     def pick_folder(self):
         import webview
-        res = self.window.create_file_dialog(webview.FileDialog.FOLDER)
+        res = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         return res[0] if res else None
 
 
@@ -313,7 +315,7 @@ def main() -> None:
     api = DesktopAPI()
     window = webview.create_window(f"{APP_NAME}", url, js_api=api, width=1440, height=900,
                                    min_size=(1024, 680), background_color="#0B0D10", text_select=True)
-    api.window = window
+    api._window = window
     window.events.loaded += lambda: _bind_native_drop(window)
     webview.start(private_mode=False, storage_path=str(LOG_DIR.parent / "webview"))
     server.should_exit = True
