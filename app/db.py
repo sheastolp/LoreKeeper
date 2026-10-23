@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS clips (
     id          TEXT PRIMARY KEY,
     run_id      TEXT NOT NULL,
     person_id   TEXT,
+    marker_id   TEXT,                            -- kill clips: the on-screen marker that found them
     source_id   TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
     start       REAL NOT NULL,
     end         REAL NOT NULL,
@@ -119,6 +120,21 @@ CREATE TABLE IF NOT EXISTS clips (
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_clips_run ON clips(run_id, score DESC);
+
+CREATE TABLE IF NOT EXISTS kill_markers (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    source_id   TEXT,                   -- the VOD it was taught from (may be deleted later)
+    t           REAL NOT NULL,
+    x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,   -- box, 0..1 of the frame
+    pad         REAL NOT NULL,          -- extra search height above/below, in box heights (kill feeds slide)
+    tw          INTEGER NOT NULL,
+    th          INTEGER NOT NULL,
+    template    BLOB NOT NULL,          -- float32 edge template, th x tw
+    preview     BLOB,                   -- PNG of the boxed frame region
+    threshold   REAL NOT NULL DEFAULT 0,  -- sensitivity offset: + looser, - stricter
+    created_at  REAL NOT NULL
+);
 """
 
 
@@ -129,6 +145,9 @@ class DB:
         self.lock = threading.RLock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(clips)")}
+            if "marker_id" not in cols:
+                self.conn.execute("ALTER TABLE clips ADD COLUMN marker_id TEXT")
         self.version = 0  # bumps whenever chunks change -> vector cache invalidation
 
     # ---------------------------------------------------------- helpers

@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from . import ai, engine, models, ollama, qa, twitch, voice
 from . import clips as clips_mod
+from . import kills, transcripts
 from . import search as search_mod
 from .config import (APP_VERSION, DERIVED_DIR, IS_WINDOWS, ffmpeg_bin, get_settings, resource_root,
                      update_settings)
@@ -370,6 +371,15 @@ def transcript(sid: str):
     return tr
 
 
+@app.patch("/api/sources/{sid}/transcript")
+def edit_transcript(sid: str, body: dict = Body(...)):
+    """Correct lines: {edits:[{i, start, text}]}. Word timings, search chunks and clip transcripts follow."""
+    try:
+        return transcripts.edit(sid, body.get("edits") or [])
+    except (transcripts.TranscriptError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.post("/api/sources/{sid}/subtitles")
 def export_subs(sid: str, body: dict = Body(...)):
     s = db.source(sid)
@@ -623,6 +633,60 @@ def find_clips(body: dict = Body(...)):
     return jobs.submit("clips", f"Find {p['name']}'s best moments", lambda j: clips_mod.find(
         j, pid, sids, length=body.get("length", "medium"), per_vod=int(body.get("per_vod", 6)),
         sensitivity=body.get("sensitivity"), use_ai=bool(body.get("use_ai", True))), lane="clips").to_dict()
+
+
+@app.get("/api/kills/markers")
+def list_kill_markers():
+    return kills.markers()
+
+
+def _kf(fn):
+    try:
+        return fn()
+    except (kills.KillError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/kills/markers")
+def add_kill_marker(body: dict = Body(...)):
+    """{name, source_id, t, box:{x,y,w,h} as 0..1 of the frame, feed: bool}"""
+    return _kf(lambda: kills.create_marker(body.get("name") or "Kill", body["source_id"], float(body["t"]),
+                                           body["box"], bool(body.get("feed"))))
+
+
+@app.patch("/api/kills/markers/{mid}")
+def edit_kill_marker(mid: str, body: dict = Body(...)):
+    return _kf(lambda: kills.update_marker(mid, body.get("name"), body.get("sensitivity")))
+
+
+@app.delete("/api/kills/markers/{mid}")
+def remove_kill_marker(mid: str):
+    kills.delete_marker(mid)
+    return {"ok": True}
+
+
+@app.get("/api/kills/markers/{mid}/preview")
+def kill_marker_preview(mid: str):
+    r = db.one("SELECT preview FROM kill_markers WHERE id=?", (mid,))
+    if not r or not r["preview"]:
+        raise HTTPException(404)
+    return Response(r["preview"], media_type="image/png")
+
+
+@app.get("/api/kills/markers/{mid}/timeline")
+def kill_timeline(mid: str, source_id: str):
+    return _kf(lambda: kills.timeline(source_id, mid))
+
+
+@app.post("/api/clips/find_kills")
+def find_kill_clips(body: dict = Body(...)):
+    mid, sids = body.get("marker_id"), body.get("source_ids") or []
+    if not mid or not sids:
+        raise HTTPException(400, "Pick a kill marker and at least one VOD")
+    mk = _kf(lambda: kills.marker(mid))
+    return jobs.submit("clips", f"Find kills: {mk['name']}", lambda j: kills.find(
+        j, mid, sids, per_vod=int(body.get("per_vod", 6)), min_kills=int(body.get("min_kills", 1)),
+        use_ai=bool(body.get("use_ai", True))), lane="clips").to_dict()
 
 
 @app.get("/api/clips")

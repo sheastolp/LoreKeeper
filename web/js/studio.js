@@ -102,6 +102,10 @@ export function mount(el) {
   document.addEventListener("keydown", onKey);
   bus.on("sources", fillPicker);
   bus.on("jobs", renderSide);
+  bus.on("transcript", ({ id }) => {        // corrected elsewhere: word indices moved, so drop the cache and any strikes
+    delete transcripts[id]; delete deletions[id];
+    if (src?.id === id && mode === "transcript") { picked.clear(); renderPane(); }
+  });
   fillPicker();
   renderPane();
   renderSide();

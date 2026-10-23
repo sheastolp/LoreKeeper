@@ -1,5 +1,6 @@
 import { bus, clear, del, desktop, fmtBytes, fmtTime, get, glyphFor, h, icon, kindLabel, patch, pickAndAddFiles,
   post, sourceById, state, toast } from "./core.js";
+import { editableTranscript } from "./transcript.js";
 
 let root, rowsEl, detailEl, countEl, scopeBtn;
 let selected = null;
@@ -202,8 +203,8 @@ async function renderDetail() {
 }
 
 function transcriptTab(d, seek) {
-  return h("div.seglist", d.transcript.segments.map((sg) =>
-    h("p", h("button.ts", { onclick: () => seek(sg.start), title: "Play from here" }, fmtTime(sg.start)), h("span", sg.text))));
+  return h("div", h("p.muted.tr-hint", "Click any line to correct it. Enter saves, Esc cancels. Captions, subtitles and search use the fix."),
+    editableTranscript(d.id, d.transcript.segments, { seek }));
 }
 
 function framesTab(d, seek) {

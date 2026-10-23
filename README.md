@@ -50,13 +50,21 @@ Why isn't the model inside the installer? GitHub caps release files at 2 GB and 
 1. **Get VODs in.** Clips → *Import from Twitch*: type a channel name (or paste a VOD link), tick past broadcasts, optionally give a time range like `1:30:00` to `2:15:00` so you only download that part. Or add recordings/OBS files in the Library. Every audio/video item is transcribed and voice-indexed automatically.
 2. **Teach it the person.** Clips → People → *Add*. Pick a VOD they're in and hit *Find the voices*: Lorekeeper groups all the talking by voice, you play a couple of samples and click *This is them*. Or tick a few of their lines in the transcript. *Teach more* adds examples later (a different mic or a different VOD makes it sharper).
 3. **Find clips.** Pick the VODs, a clip length (short 12–30 s, medium 25–60 s, long 50–120 s) and how many per VOD, then *Find clips*. The gold strip under each VOD shows where they're talking.
-4. **Review and export.** Arrow keys step through clips. Trim with ±1 s or *Here*, rename, then export 16:9 or vertical. *Keep* and *Dismiss* sort the pile.
+4. **Review and export.** Arrow keys step through clips. Trim with ±1 s or *Here*, rename, then export 16:9 or vertical. *Keep* and *Dismiss* sort the pile. If Whisper misheard something, *Fix mistakes* next to the transcript lets you correct the lines before exporting so the captions come out right (the Library's Transcript tab does the same for a whole item).
 
 How it recognises voices: Whisper's word timestamps mark where people talk; every 2-second stretch becomes a 512-number voiceprint from the CAM++ speaker model (3D-Speaker, runs on the CPU in milliseconds). Stream audio makes everyone sound alike (game sound and music sit under every voice), so matching subtracts the average voiceprint of the stretches that sound *least* like the person, then lets the most confident matches in each VOD sharpen the person's voiceprint for that VOD. On a test stream built from real recorded speech over game noise and music, that cut wrong matches from about 1 in 5 to about 1 in 50. *Sensitivity* in a person's settings trades missed moments for wrong ones.
 
 How it picks highlights: clip-length windows where the person does at least a fifth of the talking are scored on their share of the talking, loudness spikes against the VOD's own baseline, speech pace, and excitement in the words. The best go to the local model with a speaker-labelled transcript; it rates each 1–10, writes a Shorts-style title, and picks the tightest setup-to-payoff span. With no model installed it still works, ranking by the sound signals and titling from the transcript.
 
 Clips are saved in the exports folder as `<Person> - <Title> - vertical|16x9 <time>.mp4`.
+
+## Clips of every kill
+
+1. **Teach it your kill notification.** Clips → Kill markers → *Add*. Pick a VOD, pause on a frame where your kill shows (a kill-feed row, a banner, a skull) and drag a box around it. In a kill feed, box one of *your* rows (games usually highlight them) so other players' kills don't count. Leave *It's a kill feed* ticked if rows stack and slide; untick it for a banner that stays put.
+2. **Find clips.** Pick the marker and some VODs, choose *Every kill*, *Multi-kills* or *3+ kills*, then *Find clips*. The red ticks under each VOD show every kill spotted.
+3. Review and export as above. A gear on the marker card sets how close a match has to be.
+
+How it works: Lorekeeper decodes only that corner of the screen at 4 frames a second and slides an edge template of your box over it (normalised cross-correlation, so brightness and the game behind it don't matter much). A kill is a new match appearing. Kills within 10 s of each other chain into one moment (double, triple…), each clip gets 6 s of lead-in, and they're ranked by kill count, how fast the kills came, and how loud you got. Scans are cached per VOD, so changing sensitivity or rerunning is instant. With a local model and a transcript, the AI writes the titles.
 
 ## Watermark
 
@@ -109,6 +117,7 @@ app/            Python backend (FastAPI on 127.0.0.1, token-locked)
   editing/      FFmpeg recipes, transcript cuts, captions, corner watermark, timeline renderer
   engine.py     llama-server process manager    models.py  catalog, downloads, GGUF imports
   voice.py      voiceprints, voice discovery    clips.py   highlight finder    twitch.py  VOD import
+  kills.py      on-screen kill detection
   ai.py         one front door: built-in engine or Ollama      gguf.py  GGUF header reader
   search.py     hybrid retrieval      qa.py   answer prompt + streaming
 web/            UI (vanilla JS modules, no build step)

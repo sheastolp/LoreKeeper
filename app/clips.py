@@ -254,8 +254,9 @@ def find(job: Job, person_id: str, source_ids: list[str], length: str = "medium"
 # ------------------------------------------------------------------ queries
 
 def list_clips(run_id: str | None = None, person_id: str | None = None, status: str | None = None) -> list[dict]:
-    q, args = ("SELECT c.*, s.title AS source_title, s.kind AS source_kind, p.name AS person "
-               "FROM clips c JOIN sources s ON s.id=c.source_id LEFT JOIN people p ON p.id=c.person_id WHERE 1=1"), []
+    q, args = ("SELECT c.*, s.title AS source_title, s.kind AS source_kind, p.name AS person, m.name AS marker "
+               "FROM clips c JOIN sources s ON s.id=c.source_id LEFT JOIN people p ON p.id=c.person_id "
+               "LEFT JOIN kill_markers m ON m.id=c.marker_id WHERE 1=1"), []
     if run_id:
         q += " AND c.run_id=?"
         args.append(run_id)
@@ -278,8 +279,9 @@ def list_clips(run_id: str | None = None, person_id: str | None = None, status: 
 
 
 def runs() -> list[dict]:
-    rows = db.q("SELECT c.run_id, c.person_id, p.name AS person, COUNT(*) AS n, MIN(c.created_at) AS created, "
-                "COUNT(DISTINCT c.source_id) AS vods FROM clips c LEFT JOIN people p ON p.id=c.person_id "
+    rows = db.q("SELECT c.run_id, c.person_id, p.name AS person, c.marker_id, m.name AS marker, COUNT(*) AS n, "
+                "MIN(c.created_at) AS created, COUNT(DISTINCT c.source_id) AS vods FROM clips c "
+                "LEFT JOIN people p ON p.id=c.person_id LEFT JOIN kill_markers m ON m.id=c.marker_id "
                 "GROUP BY c.run_id ORDER BY created DESC LIMIT 50")
     return [dict(r) for r in rows]
 
@@ -300,8 +302,9 @@ def update(cid: str, **fields) -> dict:
 
 
 def get_clip(cid: str) -> dict:
-    r = db.one("SELECT c.*, s.title AS source_title, s.kind AS source_kind, p.name AS person FROM clips c "
-               "JOIN sources s ON s.id=c.source_id LEFT JOIN people p ON p.id=c.person_id WHERE c.id=?", (cid,))
+    r = db.one("SELECT c.*, s.title AS source_title, s.kind AS source_kind, p.name AS person, m.name AS marker FROM clips c "
+               "JOIN sources s ON s.id=c.source_id LEFT JOIN people p ON p.id=c.person_id "
+               "LEFT JOIN kill_markers m ON m.id=c.marker_id WHERE c.id=?", (cid,))
     if not r:
         raise ValueError("Clip not found")
     d = dict(r)

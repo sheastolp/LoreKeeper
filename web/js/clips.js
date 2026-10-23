@@ -1,9 +1,14 @@
-// Clips: find a person's best moments across VODs, review them, export 16:9 or vertical.
+// Clips: find a person's best moments (by voice) or every kill (by an on-screen marker) across VODs,
+// review them, export 16:9 or vertical.
 import { bus, clear, del, fmtBytes, fmtTime, get, h, icon, patch, post, reveal, state, toast, waitForJob, openPlayer, sourceById } from "./core.js";
+import { editableTranscript } from "./transcript.js";
 
-let root, peopleEl, vodsEl, runEl, gridEl, detailEl;
+let root, peopleEl, markersEl, vodsEl, runEl, gridEl, detailEl;
 let people = [];
 let selPerson = null;
+let markers = [];
+let selMarker = null;
+let mode = "voice";            // voice: a person's best moments | kills: every kill a marker spots
 const selVods = new Set();
 let runs = [];
 let curRun = null;
@@ -12,10 +17,12 @@ let selClip = null;
 let statusFilter = "";
 let findJob = null;
 let presenceCache = {};
-const opts = { length: "short", per_vod: 6 };
+const opts = { length: "short", per_vod: 6, min_kills: 1 };
 const ex = { layout: "vertical", vertical_mode: "crop", focus: 0.5, captions: true, show_title: false };
 const RATE = { 1080: 7.4, 720: 3.1, 480: 1.3, 360: 0.63 };  // Mbit/s, typical Twitch VOD renditions
 const LENGTH = [["short", "Short", "12–30 s"], ["medium", "Medium", "25–60 s"], ["long", "Long", "50–120 s"]];
+const MINKILLS = [[1, "Every kill"], [2, "Multi-kills"], [3, "3+ kills"]];
+const KILLNAME = { 1: "Kill", 2: "Double kill", 3: "Triple kill", 4: "Quad kill" };
 
 try { Object.assign(ex, JSON.parse(localStorage.getItem("lk:clipexport") || "{}")); } catch { /* */ }
 const saveEx = () => { try { localStorage.setItem("lk:clipexport", JSON.stringify(ex)); } catch { /* */ } };
@@ -23,16 +30,18 @@ const saveEx = () => { try { localStorage.setItem("lk:clipexport", JSON.stringif
 export function mount(el) {
   root = el;
   peopleEl = h("div.cl-people");
+  markersEl = h("div.cl-people");
   vodsEl = h("div.cl-vods");
   runEl = h("div.cl-run");
   gridEl = h("div.cl-grid");
   detailEl = h("aside.cl-detail");
   el.append(
-    h("header.view-head", h("h1", "Clips"), h("span.sub", "Find someone's best moments across VODs by their voice"), h("div.grow"),
+    h("header.view-head", h("h1", "Clips"), h("span.sub", "Find someone's best moments by their voice, or every kill on screen"), h("div.grow"),
       h("button.btn", { onclick: openTwitch }, icon("twitch"), "Import from Twitch")),
     h("div.cl-body",
       h("div.cl-side",
         h("div.cl-sec", h("div.cl-sec-head", h("h2", "People"), h("button.btn.sm", { onclick: () => openPersonModal() }, icon("plus"), "Add")), peopleEl),
+        h("div.cl-sec", h("div.cl-sec-head", h("h2", "Kill markers"), h("button.btn.sm", { onclick: () => openMarkerModal() }, icon("plus"), "Add")), markersEl),
         h("div.cl-sec.grow-sec", h("div.cl-sec-head", h("h2", "VODs"),
           h("button.btn.ghost.sm", { onclick: toggleAllVods }, "All / none")), vodsEl)),
       h("div.cl-main", runEl, gridEl),
@@ -43,7 +52,7 @@ export function mount(el) {
 }
 
 export async function show() {
-  await Promise.all([loadPeople(), loadRuns()]);
+  await Promise.all([loadPeople(), loadMarkers(), loadRuns()]);
   renderVods();
 }
 export function hide() { detailEl.querySelector("video")?.pause(); }
@@ -54,6 +63,13 @@ async function loadPeople() {
   if (selPerson && !people.find((p) => p.id === selPerson)) selPerson = null;
   if (!selPerson && people.length) selPerson = people[people.length - 1].id;
   renderPeople(); renderRun();
+}
+async function loadMarkers() {
+  markers = await get("/api/kills/markers");
+  if (selMarker && !markers.find((m) => m.id === selMarker)) selMarker = null;
+  if (!selMarker && markers.length) selMarker = markers[markers.length - 1].id;
+  if (mode === "kills" && !selMarker) mode = "voice";
+  renderMarkers(); renderRun();
 }
 async function loadRuns(pick) {
   runs = await get("/api/clips/runs");
@@ -67,6 +83,8 @@ async function loadClips() {
   renderRun(); renderGrid(); renderDetail();
 }
 const person = () => people.find((p) => p.id === selPerson);
+const marker = () => markers.find((m) => m.id === selMarker);
+function setMode(m) { mode = m; presenceCache = {}; renderPeople(); renderMarkers(); renderVods(); renderRun(); }
 const vodItems = () => state.sources.filter((s) => (s.kind === "video" || s.kind === "audio"));
 
 function onJobs(list) {
@@ -78,8 +96,10 @@ function onJobs(list) {
     findJob = null;
     if (j.status === "done") {
       const r = j.result;
-      toast(r.clips ? `Found ${r.clips} clip${r.clips > 1 ? "s" : ""} of ${r.person}.` : `No clips of ${r.person} this time.`);
+      if (r.kind === "kills") toast(r.clips ? `Found ${r.clips} kill clip${r.clips > 1 ? "s" : ""}.` : "No kills spotted this time.");
+      else toast(r.clips ? `Found ${r.clips} clip${r.clips > 1 ? "s" : ""} of ${r.person}.` : `No clips of ${r.person} this time.`);
       for (const n of r.notes || []) toast(n, false, 7000);
+      if (r.kind === "kills") { presenceCache = {}; renderVods(); }
       loadRuns(r.run_id);
     } else if (j.status === "error") toast(j.error, true, 8000);
     renderRun();
@@ -94,8 +114,8 @@ function renderPeople() {
     return;
   }
   clear(peopleEl, people.map((p) => {
-    const on = p.id === selPerson;
-    const card = h(`div.pcard${on ? ".on" : ""}`, { onclick: () => { selPerson = p.id; presenceCache = {}; renderPeople(); renderVods(); renderRun(); } },
+    const on = mode === "voice" && p.id === selPerson;
+    const card = h(`div.pcard${on ? ".on" : ""}`, { onclick: () => { selPerson = p.id; setMode("voice"); } },
       h("div.pc-dot", p.name.slice(0, 1).toUpperCase()),
       h("div.pc-t", h("b", p.name), h("small", `${Math.round(p.seconds)} s of voice${p.threshold ? (p.threshold > 0 ? ", looser" : ", stricter") : ""}`)),
       h("button.btn.ghost.sm.icon", { "aria-label": `Edit ${p.name}`, onclick: (e) => { e.stopPropagation(); card.classList.toggle("edit"); } }, icon("gear")));
@@ -107,6 +127,29 @@ function renderPeople() {
       h("div.row-actions",
         h("button.btn.sm", { onclick: () => openPersonModal(p) }, icon("wave"), "Teach more"),
         h("button.btn.sm.danger", { onclick: async () => { if (confirm(`Forget ${p.name}'s voice? Their clips stay.`)) { await del(`/api/people/${p.id}`); loadPeople(); } } }, icon("trash"), "Forget"))));
+    return card;
+  }));
+}
+
+function renderMarkers() {
+  if (!markersEl) return;
+  if (!markers.length) {
+    clear(markersEl, h("p.cl-empty", "Clip every kill: pause a VOD on your kill notification (kill feed row, banner, skull) and draw a box around it."));
+    return;
+  }
+  clear(markersEl, markers.map((mk) => {
+    const on = mode === "kills" && mk.id === selMarker;
+    const card = h(`div.pcard${on ? ".on" : ""}`, { onclick: () => { selMarker = mk.id; setMode("kills"); } },
+      h("div.pc-dot.kc-prev", { style: { backgroundImage: `url(/api/kills/markers/${mk.id}/preview)` } }),
+      h("div.pc-t", h("b", mk.name), h("small", `${mk.pad > 1 ? "Kill feed" : "On-screen marker"}${mk.threshold ? (mk.threshold > 0 ? ", looser" : ", stricter") : ""}`)),
+      h("button.btn.ghost.sm.icon", { "aria-label": `Edit ${mk.name}`, onclick: (e) => { e.stopPropagation(); card.classList.toggle("edit"); } }, icon("gear")));
+    const sens = h("input", { type: "range", min: -0.15, max: 0.15, step: 0.03, value: -mk.threshold, "aria-label": "Sensitivity",
+      onchange: async (e) => { await patch(`/api/kills/markers/${mk.id}`, { sensitivity: -Number(e.target.value) }); presenceCache = {}; loadMarkers(); renderVods(); } });
+    card.append(h("div.pc-edit", { onclick: (e) => e.stopPropagation() },
+      h("label.field", h("span", "Name"), h("input.input", { value: mk.name, onchange: async (e) => { await patch(`/api/kills/markers/${mk.id}`, { name: e.target.value }); loadMarkers(); } })),
+      h("label.field", h("span", "How close a match counts as a kill"), h("div.sens", h("small", "Looser"), sens, h("small", "Stricter"))),
+      h("div.row-actions",
+        h("button.btn.sm.danger", { onclick: async () => { if (confirm(`Forget the "${mk.name}" marker? Its clips stay.`)) { await del(`/api/kills/markers/${mk.id}`); loadMarkers(); } } }, icon("trash"), "Forget"))));
     return card;
   }));
 }
@@ -124,15 +167,17 @@ function renderVods() {
   }
   clear(vodsEl, items.map((s) => {
     const ready = s.status === "ready";
+    const kills = mode === "kills" && selMarker;
     const cb = h("input", { type: "checkbox", checked: selVods.has(s.id), disabled: !ready, "aria-label": `Use ${s.title}`,
       onchange: (e) => { e.target.checked ? selVods.add(s.id) : selVods.delete(s.id); renderRun(); } });
-    const strip = h("canvas.strip", { width: 260, height: 14, title: "Where they're talking" });
+    const strip = h("canvas.strip", { width: 260, height: 14, title: kills ? "Kills spotted" : "Where they're talking" });
     const row = h("label.vod", cb,
       h("div.vod-t", h("span.vod-n", { title: s.title }, s.title),
-        h("small", ready ? [fmtTime(s.duration), s.meta.voice_windows ? "" : ", voices not analysed yet"]
+        h("small", ready ? [fmtTime(s.duration), kills ? (s.kind === "video" ? "" : ", no picture") : s.meta.voice_windows ? "" : ", voices not analysed yet"]
           : h("span.stage", s.stage || "Indexing…")),
-        ready && selPerson && strip));
-    if (ready && selPerson) drawPresence(strip, s.id);
+        ready && (kills ? s.kind === "video" : selPerson) && strip));
+    if (ready && kills && s.kind === "video") drawKills(strip, s.id);
+    else if (ready && !kills && selPerson) drawPresence(strip, s.id);
     return row;
   }));
   renderRun();
@@ -159,8 +204,24 @@ async function drawPresence(canvas, sid) {
   canvas.title = `${Math.round(d.seconds)} s of them talking`;
 }
 
+async function drawKills(canvas, sid) {
+  const key = `k${selMarker}|${sid}`;
+  let d = presenceCache[key];
+  if (!d) {
+    try { d = presenceCache[key] = await get(`/api/kills/markers/${selMarker}/timeline?source_id=${sid}`); } catch { return; }
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#2e2c3b";
+  ctx.fillRect(0, 6, canvas.width, 2);
+  if (!d.ready) { canvas.title = "Not scanned for kills yet"; return; }
+  ctx.fillStyle = "#c8553d";
+  for (const t of d.kills) ctx.fillRect(Math.floor((t / d.duration) * canvas.width), 1, 2, 12);
+  canvas.title = `${d.kills.length} kill${d.kills.length === 1 ? "" : "s"} spotted`;
+}
+
 function toggleAllVods() {
-  const ready = vodItems().filter((s) => s.status === "ready");
+  const ready = vodItems().filter((s) => s.status === "ready" && (mode !== "kills" || s.kind === "video"));
   if (ready.every((s) => selVods.has(s.id))) selVods.clear(); else ready.forEach((s) => selVods.add(s.id));
   renderVods();
 }
@@ -168,22 +229,27 @@ function toggleAllVods() {
 // ---------------------------------------------------------------- run bar + results
 function renderRun() {
   if (!runEl) return;
-  const p = person();
-  const n = selVods.size;
-  const lenSeg = h("div.seg", LENGTH.map(([k, label, hint]) => h("button", { "aria-pressed": String(opts.length === k), title: hint,
-    onclick: () => { opts.length = k; renderRun(); } }, label)));
+  const kills = mode === "kills";
+  const p = kills ? marker() : person();
+  const n = kills ? killVods().length : selVods.size;
+  const lenSeg = kills
+    ? h("div.seg", MINKILLS.map(([k, label]) => h("button", { "aria-pressed": String(opts.min_kills === k),
+      onclick: () => { opts.min_kills = k; renderRun(); } }, label)))
+    : h("div.seg", LENGTH.map(([k, label, hint]) => h("button", { "aria-pressed": String(opts.length === k), title: hint,
+      onclick: () => { opts.length = k; renderRun(); } }, label)));
   const perSel = h("select.input", { "aria-label": "Clips per VOD", onchange: (e) => { opts.per_vod = Number(e.target.value); } },
     [3, 6, 10, 15].map((v) => h("option", { value: v, selected: v === opts.per_vod }, `${v} per VOD`)));
   const go = h("button.btn.primary", { disabled: !p || !n || !!findJob, onclick: startFind }, icon("clips"),
     findJob ? "Finding…" : "Find clips");
   const runSel = runs.length ? h("select.input", { "aria-label": "Results", onchange: (e) => { curRun = e.target.value; selClip = null; loadClips(); } },
     runs.map((r) => h("option", { value: r.run_id, selected: r.run_id === curRun },
-      `${r.person || "Someone"}: ${r.n} clip${r.n > 1 ? "s" : ""} from ${r.vods} VOD${r.vods > 1 ? "s" : ""}, ${new Date(r.created * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`))) : null;
+      `${r.person || (r.marker ? `${r.marker} kills` : "Someone")}: ${r.n} clip${r.n > 1 ? "s" : ""} from ${r.vods} VOD${r.vods > 1 ? "s" : ""}, ${new Date(r.created * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`))) : null;
   const filt = h("div.seg", [["", "To review"], ["kept", "Kept"], ["dismissed", "Dismissed"]].map(([k, l]) =>
     h("button", { "aria-pressed": String(statusFilter === k), onclick: () => { statusFilter = k; loadClips(); } }, l)));
   clear(runEl,
     h("div.cl-runbar",
-      h("div.cl-q", p ? ["Find ", h("b", p.name), ` in ${n || "no"} VOD${n === 1 ? "" : "s"}`] : h("span.muted", "Pick a person on the left")),
+      h("div.cl-q", p ? [kills ? "Find kills by " : "Find ", h("b", p.name), ` in ${n || "no"} VOD${n === 1 ? "" : "s"}`]
+        : h("span.muted", kills ? "Pick a kill marker on the left" : "Pick a person on the left")),
       lenSeg, perSel, h("div.grow"), go),
     h("div.cl-prog#cl-prog", { hidden: !findJob }),
     runs.length ? h("div.cl-resbar", runSel, h("div.grow"), filt) : null);
@@ -199,9 +265,13 @@ function renderProgress(j) {
       h("button.btn.ghost.sm", { onclick: () => post(`/api/jobs/${j.id}/cancel`) }, "Stop")));
 }
 
+const killVods = () => [...selVods].filter((id) => sourceById(id)?.kind === "video");
+
 async function startFind() {
   try {
-    const j = await post("/api/clips/find", { person_id: selPerson, source_ids: [...selVods], length: opts.length, per_vod: opts.per_vod });
+    const j = mode === "kills"
+      ? await post("/api/clips/find_kills", { marker_id: selMarker, source_ids: killVods(), per_vod: opts.per_vod, min_kills: opts.min_kills })
+      : await post("/api/clips/find", { person_id: selPerson, source_ids: [...selVods], length: opts.length, per_vod: opts.per_vod });
     findJob = j.id;
     bus.emit("jobs:refresh");
     renderRun();
@@ -214,7 +284,7 @@ function renderGrid() {
     clear(gridEl, h("div.empty",
       h("h2", runs.length ? "Nothing here" : "No clips yet"),
       runs.length ? "Try another filter, or run a new search." :
-        "Pick a person and some VODs, then Find clips. Lorekeeper listens for their voice, scores every moment they're in for hype, laughs and pace, and has the AI pick and title the best ones."));
+        "Pick a person and some VODs, then Find clips. Lorekeeper listens for their voice, scores every moment they're in for hype, laughs and pace, and has the AI pick and title the best ones. Or add a kill marker to clip every kill and multi-kill."));
     return;
   }
   clear(gridEl, clipList.map((c, i) => {
@@ -222,7 +292,7 @@ function renderGrid() {
     return h(`button.ccard${on ? ".on" : ""}${c.status === "kept" ? ".kept" : ""}`, { onclick: () => selectClip(c), "data-i": i },
       h("div.cthumb", { style: { backgroundImage: `url(/clipthumb/${c.id})` } },
         h("span.cdur", fmtTime(c.end - c.start)),
-        h("span.cscore", { title: c.ai_score ? `AI ${c.ai_score}/10` : "Sound + talk-time score" }, Math.round(c.score * 100)),
+        h("span.cscore", { title: c.ai_score ? `AI ${c.ai_score}/10` : c.signals.kills ? "Kills, speed and reaction" : "Sound + talk-time score" }, Math.round(c.score * 100)),
         c.exports.length ? h("span.cexp", icon("check"), c.exports.length) : null),
       h("div.ctitle", c.title),
       h("div.cmeta", `${c.source_title}, ${fmtTime(c.start)}`),
@@ -308,17 +378,36 @@ function renderDetail(autoplay) {
   const sig = c.signals || {};
   const pills = [
     c.ai_score && h("span.pill.ok", `AI ${c.ai_score}/10`),
+    sig.kills && h("span.pill.warm", KILLNAME[sig.kills] || `${sig.kills} kills`),
     sig.share !== undefined && h("span.pill.plain", `${Math.round(sig.share * 100)}% ${c.person || "them"} talking`),
     sig.hype_z > 2 && h("span.pill.warm", "Loud reaction"),
     sig.pace > 1.2 && h("span.pill.plain", `${sig.pace.toFixed(1)}× usual pace`),
   ];
-  const transcript = h("div.cl-trans", (c.transcript || "").split("\n").filter(Boolean).map((line) => {
+  const said = () => h("div.cl-trans", (c.transcript || "").split("\n").filter(Boolean).map((line) => {
     const m = line.match(/^\d+ \[([^\]]+)\] ([^:]+): (.*)$/);
     if (!m) return h("p", line);
     const mine = m[2] === c.person;
     return h(`p${mine ? ".mine" : ""}`, h("span.ts", m[1]), h("b", m[2]), " ", m[3].replace(/\s+\(LOUD\)$/, ""),
       /\(LOUD\)$/.test(m[3]) ? h("span.loud", "LOUD") : null);
   }));
+  const transcript = h("div", said());
+  let fixing = false;
+  const fixBtn = h("button.btn.ghost.sm", { onclick: toggleFix, title: "Correct what Whisper misheard; captions use the fix" }, "Fix mistakes");
+  async function toggleFix() {
+    fixing = !fixing;
+    fixBtn.textContent = fixing ? "Done" : "Fix mistakes";
+    if (!fixing) { clear(transcript, said()); return; }
+    clear(transcript, h("p.muted", "Loading transcript…"));
+    try {
+      const tr = await get(`/api/sources/${c.source_id}/transcript`);
+      clear(transcript, h("p.muted.tr-hint", "Click a line to correct it. Enter saves, Esc cancels."),
+        editableTranscript(c.source_id, tr.segments, {
+          from: c.start, to: c.end,
+          seek: (t) => { v.currentTime = t; v.play().catch(() => {}); },
+          onSaved: (sg, old) => { c.transcript = (c.transcript || "").replace(`: ${old}`, `: ${sg.text}`); },
+        }));
+    } catch (e) { fixing = false; fixBtn.textContent = "Fix mistakes"; clear(transcript, said()); toast(e.message, true); }
+  }
 
   const layoutSeg = h("div.seg", [["landscape", "16:9", "wide"], ["vertical", "Vertical", "phone"]].map(([k, l, ic]) =>
     h("button", { "aria-pressed": String(ex.layout === k), onclick: () => { ex.layout = k; saveEx(); renderExport(); layoutFrame(); } }, icon(ic), l)));
@@ -383,7 +472,7 @@ function renderDetail(autoplay) {
     title, trimEl,
     h("div.cl-why", pills, c.why && h("p", c.why)),
     h("h3.sub-h", "Export"), exportEl,
-    h("h3.sub-h", "What was said"), transcript);
+    h("div.sub-h-row", h("h3.sub-h", "What was said"), fixBtn), transcript);
 }
 
 // ---------------------------------------------------------------- add / teach a person
@@ -489,6 +578,125 @@ function openPersonModal(teach) {
       if (!teach) selPerson = done.result.id;
       toast(teach ? `${teach.name}'s voiceprint got sharper.` : `Learned ${name}'s voice.`);
       presenceCache = {}; close(); loadPeople(); renderVods();
+    } catch (e) { toast(e.message, true); }
+  }
+}
+
+// ---------------------------------------------------------------- teach a kill marker
+function openMarkerModal() {
+  const vids = vodItems().filter((s) => s.status === "ready" && s.kind === "video");
+  if (!vids.length) return toast("Add a VOD with some kills in it first.", true);
+  let sid = killVods()[0] || vids[0].id;
+  let box = null;           // {x, y, w, h} as 0..1 of the frame
+  let drag = null;
+  const v = h("video", { preload: "auto", playsInline: true, muted: true });
+  const sel = h("div.km-box", { hidden: true });
+  const over = h("div.km-over", sel);
+  const stage = h("div.km-stage", v, over);
+  const prev = h("canvas.km-prev", { width: 192, height: 48 });
+  const scrub = h("input.km-scrub", { type: "range", min: 0, max: 1, step: 0.01, value: 0, "aria-label": "Position",
+    oninput: (e) => { v.currentTime = Number(e.target.value); } });
+  const timeEl = h("span.time", "0:00");
+  const play = h("button.btn.icon", { "aria-label": "Play or pause", onclick: () => (v.paused ? v.play() : v.pause()) }, icon("play"));
+  const step = (d) => h("button.btn.sm", { onclick: () => { v.pause(); v.currentTime = Math.max(0, v.currentTime + d); } },
+    d > 0 ? `+${d < 1 ? "frame" : `${d}s`}` : `${d > -1 ? "-frame" : `${d}s`}`);
+  const nameIn = h("input.input", { placeholder: "e.g. Valorant kill banner", value: "" });
+  const feedCb = h("input", { type: "checkbox", checked: true });
+  const saveBtn = h("button.btn.primary", { disabled: true, onclick: save }, "Save marker");
+  const hint = h("p.muted.km-hint", "Pause on a frame where your kill notification is showing, then drag a box around it. In a kill feed, box one of your own rows (they're usually highlighted) so other players' kills don't count.");
+  const close = () => { v.pause(); m.remove(); };
+  const m = h("div.modal", { onclick: (e) => e.target === m && close() },
+    h("div.card.km-card",
+      h("header", h("b", "Teach a kill marker"), h("button.btn.ghost.sm.icon", { onclick: close, "aria-label": "Close" }, icon("x"))),
+      h("div.pm-top",
+        h("label.field", h("span", "Name"), nameIn),
+        h("label.field", h("span", "VOD with a kill in it"),
+          h("select.input", { onchange: (e) => { sid = e.target.value; load(); } },
+            vids.map((s) => h("option", { value: s.id, selected: s.id === sid }, s.title))))),
+      stage,
+      h("div.cl-transport", play, step(-5), step(-1 / 30), step(1 / 30), step(5), scrub, timeEl),
+      hint,
+      h("div.km-foot",
+        h("div.km-prevwrap", h("small.muted", "What it will look for"), prev),
+        h("label.check", feedCb, h("span", "It's a kill feed", h("small", "Rows stack and slide, so also look above and below the box. Untick for a banner that stays put."))),
+        h("div.grow"), saveBtn)));
+  document.body.append(m);
+  load();
+
+  function load() {
+    box = null; sel.hidden = true; saveBtn.disabled = true;
+    v.src = `/media/${sid}`;
+  }
+  v.addEventListener("loadedmetadata", () => { scrub.max = v.duration; v.currentTime = Math.min(v.duration / 3, 60); });
+  v.addEventListener("timeupdate", () => { scrub.value = v.currentTime; timeEl.textContent = fmtTime(v.currentTime, true); });
+  v.addEventListener("seeked", drawPreview);
+  v.addEventListener("pause", drawPreview);
+  v.addEventListener("play", () => clear(play, icon("pause")));
+  v.addEventListener("pause", () => clear(play, icon("play")));
+  new ResizeObserver(placeBox).observe(stage);
+
+  // the picture inside the <video> box (object-fit: contain letterboxes it)
+  function content() {
+    const r = v.getBoundingClientRect();
+    const ar = (v.videoWidth || 16) / (v.videoHeight || 9);
+    let w = r.width, hh = r.width / ar;
+    if (hh > r.height) { hh = r.height; w = hh * ar; }
+    return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - hh) / 2, width: w, height: hh, ox: (r.width - w) / 2, oy: (r.height - hh) / 2 };
+  }
+  const norm = (e) => {
+    const c = content();
+    return { x: Math.min(1, Math.max(0, (e.clientX - c.left) / c.width)), y: Math.min(1, Math.max(0, (e.clientY - c.top) / c.height)) };
+  };
+  over.addEventListener("pointerdown", (e) => {
+    v.pause();
+    try { over.setPointerCapture(e.pointerId); } catch { /* */ }
+    drag = norm(e);
+    if (isNaN(drag.x) || isNaN(drag.y)) { drag = null; return; }
+    box = { x: drag.x, y: drag.y, w: 0, h: 0 };
+    placeBox();
+  });
+  over.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const p = norm(e);
+    box = { x: Math.min(drag.x, p.x), y: Math.min(drag.y, p.y), w: Math.abs(p.x - drag.x), h: Math.abs(p.y - drag.y) };
+    placeBox();
+  });
+  over.addEventListener("pointerup", () => {
+    drag = null;
+    if (box && (box.w < 0.01 || box.h < 0.008)) { box = null; placeBox(); }
+    saveBtn.disabled = !box;
+    hint.textContent = box ? "Box it snugly: just the notification, not the game behind it. Redraw any time." :
+      "Pause on a frame where your kill notification is showing, then drag a box around it.";
+    drawPreview();
+  });
+
+  function placeBox() {
+    sel.hidden = !box;
+    if (!box) return;
+    const c = content();
+    Object.assign(sel.style, { left: `${c.ox + box.x * c.width}px`, top: `${c.oy + box.y * c.height}px`,
+      width: `${box.w * c.width}px`, height: `${box.h * c.height}px` });
+  }
+  function drawPreview() {
+    const ctx = prev.getContext("2d");
+    ctx.fillStyle = "#14131b";
+    ctx.fillRect(0, 0, prev.width, prev.height);
+    if (!box || !v.videoWidth) return;
+    const sw = box.w * v.videoWidth, sh = box.h * v.videoHeight;
+    const k = Math.min(prev.width / sw, prev.height / sh);
+    const dw = sw * k, dh = sh * k;
+    try { ctx.drawImage(v, box.x * v.videoWidth, box.y * v.videoHeight, sw, sh, (prev.width - dw) / 2, (prev.height - dh) / 2, dw, dh); } catch { /* */ }
+  }
+  async function save() {
+    if (!box) return;
+    try {
+      const mk = await post("/api/kills/markers", { name: nameIn.value.trim() || "Kill", source_id: sid, t: v.currentTime, box, feed: feedCb.checked });
+      selMarker = mk.id;
+      mode = "kills";
+      if (!selVods.size) selVods.add(sid);
+      toast(`Saved "${mk.name}". Pick VODs and Find clips to scan them for kills.`, false, 6000);
+      close();
+      await loadMarkers(); setMode("kills");
     } catch (e) { toast(e.message, true); }
   }
 }

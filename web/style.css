@@ -699,3 +699,26 @@ canvas.strip { width: 100%; height: 14px; margin-top: 3px; display: block; }
 .tw-range { display: flex; gap: 6px; align-items: center; font-size: var(--s1); color: var(--vellum-dim); margin-top: 4px; }
 .tw-range .input { width: 120px; height: 28px; }
 .tw-foot { display: flex; gap: 12px; align-items: flex-end; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule-soft); }
+
+.kc-prev { background: #14131b center / contain no-repeat; border-radius: 6px; }
+.pcard.on .kc-prev { background-color: #14131b; outline: 2px solid var(--gilt); }
+.km-card { max-width: 900px !important; }
+.km-stage { position: relative; background: #000; border-radius: 8px; overflow: hidden; }
+.km-stage video { max-height: 58vh; border-radius: 0; }
+.km-over { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+.km-box { position: absolute; border: 2px solid var(--gilt); background: rgba(221, 182, 92, 0.12); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); pointer-events: none; }
+.km-scrub { flex: 1; min-width: 80px; }
+.km-hint { margin: 8px 0 0; font-size: var(--s2); }
+.km-foot { display: flex; gap: 16px; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule-soft); flex-wrap: wrap; }
+.km-prevwrap { display: flex; flex-direction: column; gap: 4px; }
+.km-prev { width: 192px; height: 48px; border-radius: 5px; border: 1px solid var(--rule); }
+
+/* editable transcript lines */
+.seglist.editable .tx { border-radius: 4px; padding: 0 3px; margin: 0 -3px; cursor: text; outline: none; }
+.seglist.editable .tx:hover { background: var(--ink-3); }
+.seglist.editable .tx[contenteditable="true"], .seglist.editable .tx[contenteditable="plaintext-only"] { background: var(--ink); box-shadow: 0 0 0 1px var(--gilt); }
+.seglist.editable p.edited .ts::after { content: " ✎"; color: var(--gilt); }
+.seglist.editable p.saving { opacity: 0.6; }
+.tr-hint { font-size: var(--s1); margin: 0 0 8px; }
+.sub-h-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cl-detail .seglist { font-size: 14px; }
