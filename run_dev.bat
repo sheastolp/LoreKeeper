@@ -8,4 +8,6 @@ call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip >nul
 pip install -r requirements.txt
 if not exist vendor\ffmpeg\ffmpeg.exe powershell -NoProfile -ExecutionPolicy Bypass -File packaging\fetch_ffmpeg.ps1
+rem llama.cpp engine + search model + Whisper base (about 500 MB, once)
+python packaging\fetch_vendor.py
 python -m app %*

@@ -13,7 +13,7 @@ import threading
 
 import numpy as np
 
-from . import ollama
+from . import ai
 from .db import db
 
 RRF_K = 60
@@ -26,9 +26,13 @@ _cache: dict = {"version": -1, "ids": None, "mat": None, "src": None}
 
 
 def _vectors():
+    space = ai.embed_model_id()
     with _cache_lock:
-        if _cache["version"] != db.version:
-            rows = db.q("SELECT id, source_id, embedding FROM chunks WHERE embedding IS NOT NULL")
+        if _cache["version"] != db.version or _cache.get("space") != space:
+            # only vectors made by the current embedding model live in a comparable space
+            ok = {r["id"] for r in db.q("SELECT id, meta FROM sources") if _space_of(r["meta"]) == space}
+            rows = [r for r in db.q("SELECT id, source_id, embedding FROM chunks WHERE embedding IS NOT NULL")
+                    if r["source_id"] in ok]
             if rows:
                 dims = {len(r["embedding"]) for r in rows}
                 dim = max(dims, key=lambda d: sum(1 for r in rows if len(r["embedding"]) == d))
@@ -39,7 +43,25 @@ def _vectors():
             else:
                 _cache["ids"] = _cache["mat"] = _cache["src"] = None
             _cache["version"] = db.version
+            _cache["space"] = space
+            _cache["stale"] = sum(1 for r in db.q(
+                "SELECT s.meta FROM sources s WHERE s.status='ready' AND EXISTS (SELECT 1 FROM chunks c WHERE c.source_id=s.id)")
+                if _space_of(r["meta"]) != space)
         return _cache["ids"], _cache["mat"], _cache["src"]
+
+
+def _space_of(meta_json: str) -> str | None:
+    import json
+    try:
+        return json.loads(meta_json or "{}").get("embed_space")
+    except Exception:
+        return None
+
+
+def stale_sources() -> int:
+    """Items whose vectors came from a different embedding model (need a rebuild)."""
+    _vectors()
+    return max(0, int(_cache.get("stale") or 0))
 
 
 def fts_query(text: str) -> str | None:
@@ -89,7 +111,7 @@ def search(query: str, k: int = 8, source_ids: list[str] | None = None,
     ids, mat, src = _vectors()
     if ids is not None and len(ids):
         try:
-            qv = ollama.embed([query], is_query=True)[0]
+            qv = ai.embed([query], is_query=True)[0]
             if qv.shape[0] == mat.shape[1]:
                 sims = mat @ qv
                 if scope:

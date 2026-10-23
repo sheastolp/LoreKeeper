@@ -499,3 +499,44 @@ input[type="checkbox"] { accent-color: var(--verdigris); width: 15px; height: 15
 .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--ink-3); color: var(--vellum-dim); }
 .pill.ok { background: rgba(79, 179, 162, 0.16); color: var(--verdigris); }
 .pill.no { background: var(--madder-soft); color: var(--madder); }
+
+/* ------------------------------------------------------------ AI engine + setup */
+.dot.warm { background: var(--gilt); box-shadow: 0 0 0 3px var(--gilt-soft); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .dot.warm { animation: none; } }
+.pill.warm { background: var(--gilt-soft); color: var(--gilt); }
+.pill.plain { background: var(--ink-3); color: var(--vellum-2); }
+
+.engine-card { border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 12px 14px; background: var(--ink-2); }
+.engine-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.engine-top .err { font-size: var(--s2); }
+.engine-card .facts { margin: 0; }
+.enginelog { margin: 10px 0 0; max-height: 260px; overflow: auto; background: var(--ink); border: 1px solid var(--rule-soft);
+  border-radius: var(--r-md); padding: 10px 12px; font: 11px/1.55 var(--code); color: var(--vellum-dim); white-space: pre-wrap; word-break: break-all; }
+.sub-h { font: 600 var(--s3)/1.2 var(--ui); margin: 6px 0 2px; }
+.set-fields .hint { font-size: var(--s1); color: var(--vellum-dim); margin: 0 0 6px; }
+.modelrow.inuse .nm b { color: var(--verdigris); }
+.modelrow .nm small + small { margin-top: 1px; }
+.row-actions { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.row-actions .muted { font-size: var(--s1); }
+
+.modal.setup { background: rgba(10, 9, 15, 0.86); }
+.setup-card { max-width: 760px !important; padding: 22px 24px 18px !important; }
+.setup-card header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.setup-card header b { font: 600 var(--s6)/1.2 var(--ui); font-stretch: semi-condensed; flex: 1; }
+.setup-mark { width: 30px; height: 30px; color: var(--gilt); }
+.setup-card .lede { color: var(--vellum-2); margin: 0 0 16px; max-width: 62ch; line-height: 1.55; }
+.picks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pick { border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px; display: flex; flex-direction: column; gap: 8px; background: var(--ink); }
+.pick.rec { border-color: var(--verdigris-deep); }
+.pick-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pick-top b { font: 600 var(--s4)/1.2 var(--ui); }
+.pick p { margin: 0; color: var(--vellum-dim); font-size: var(--s2); line-height: 1.5; flex: 1; }
+.pick-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: var(--s1); }
+.dl { border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px; margin-bottom: 14px; background: var(--ink); }
+.dl-top { display: flex; justify-content: space-between; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.dl .muted { font-size: var(--s2); }
+.dl p.muted { margin: 8px 0; }
+.progress.big { height: 8px; border-radius: 4px; margin-bottom: 8px; }
+.setup-alt { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+@media (max-width: 720px) { .picks { grid-template-columns: 1fr; } }

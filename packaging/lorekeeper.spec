@@ -20,10 +20,14 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers", 
         print(f"[spec] skipping {pkg}: {exc}")
 
 hiddenimports += collect_submodules("uvicorn") + collect_submodules("app")
-datas += [
-    (os.path.join(ROOT, "web"), "web"),
-    (os.path.join(ROOT, "vendor", "ffmpeg"), os.path.join("vendor", "ffmpeg")),
-]
+datas += [(os.path.join(ROOT, "web"), "web")]
+# bundled binaries + models: ffmpeg, llama.cpp's llama-server, EmbeddingGemma 2, Whisper base
+for sub in ("ffmpeg", "llama", "models", os.path.join("whisper", "base")):
+    src = os.path.join(ROOT, "vendor", sub)
+    if os.path.isdir(src):
+        datas.append((src, os.path.join("vendor", sub)))
+    else:
+        print(f"[spec] WARNING: vendor/{sub} missing - run packaging/fetch_vendor.py")
 
 a = Analysis(
     [os.path.join(ROOT, "launcher.py")],

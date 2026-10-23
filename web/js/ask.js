@@ -1,12 +1,14 @@
 import { bus, clear, fmtTime, h, icon, sourceById, state, toast } from "./core.js";
+import { openSetup } from "./setup.js";
 
-let threadEl, innerEl, sourcesEl, input, scopeEl, sendBtn;
+let root, threadEl, innerEl, sourcesEl, input, scopeEl, sendBtn;
 const items = [];          // {q, text, hits, telemetry, stats, error, done}
 let active = -1;           // which answer the sources panel is showing
 let focusTag = null;
 let streaming = false;
 
 export function mount(el) {
+  root = el;
   input = h("textarea", { rows: 1, placeholder: "Ask about anything in your library…", "aria-label": "Your question",
     oninput: autosize, onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } } });
   sendBtn = h("button.btn.primary", { onclick: () => send() }, "Ask");
@@ -20,6 +22,7 @@ export function mount(el) {
         h("div.composer", h("div.composer-inner", h("div.box", input, sendBtn), scopeEl))),
       sourcesEl = h("aside.sources", { "aria-label": "Sources" })));
   bus.on("scope", renderScope);
+  bus.on("status", () => { if (!items.length && !root.hidden) renderThread(); });
   bus.on("sources", renderScope);
   renderThread();
   renderSources();
@@ -139,9 +142,17 @@ function renderThread() {
       "Explain the trickiest concept in here like I'm a curious engineer",
       "What questions do these sources leave unanswered?",
     ];
+    const ai = state.status?.ai;
+    const noModel = ai && ai.provider === "builtin" && ai.state === "no-model";
+    const dl = ai && Object.values(ai.downloads || {}).find((d) => d.status === "running" || d.status === "queued");
+    const gate = noModel && h("div.warn", { style: { margin: "18px 0 0", display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" } },
+      dl ? `Your AI model is downloading (${Math.round(dl.progress * 100)}%). Questions work as soon as it lands.`
+        : "Lorekeeper needs an answer model before it can answer. It's a one-time download that then works offline.",
+      h("button.btn.sm" + (dl ? "" : ".primary"), { onclick: openSetup }, dl ? "Show progress" : "Set up the AI"));
     clear(innerEl, h("div.hero-ask",
       h("h2", "Ask your library anything"),
       h("p", "Every answer is built only from what you've added: transcripts, documents, web pages and what the vision model saw in your images and video frames. You get the answer, how it works, why it's that way, and one deep cut, each claim tagged with its source."),
+      gate,
       h("div.starters", starters.map((s) => h("button", { onclick: () => { input.value = s; send(); } }, s)))));
     return;
   }
@@ -161,6 +172,7 @@ function telemetryLine(it) {
   if (it.hits) bits.push(h("span", h("b", it.hits.length), " sources"));
   if (t.retrieval_ms !== undefined) bits.push(h("span", "retrieval ", h("b", `${t.retrieval_ms} ms`)));
   if (s.model) bits.push(h("span", h("b", s.model)));
+  if (s.backend) bits.push(h("span", "on ", h("b", s.backend)));
   if (s.tok_per_s) bits.push(h("span", h("b", `${s.tok_per_s} tok/s`)));
   if (s.ttft_ms) bits.push(h("span", "first token ", h("b", `${(s.ttft_ms / 1000).toFixed(1)} s`)));
   const copy = h("button.btn.ghost.sm", { onclick: (e) => { e.stopPropagation(); navigator.clipboard?.writeText(it.text); toast("Answer copied"); } }, "Copy");

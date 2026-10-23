@@ -4,6 +4,7 @@ import * as ask from "./ask.js";
 import * as studio from "./studio.js";
 import * as timeline from "./timeline.js";
 import * as settings from "./settings.js";
+import { maybeShowSetup } from "./setup.js";
 
 const VIEWS = { library, ask, studio, timeline, settings };
 const containers = {};
@@ -42,23 +43,33 @@ async function refreshSources() {
 }
 bus.on("sources:refresh", refreshSources);
 
+const AI_LABEL = {
+  ready: ["ok", "AI ready"], idle: ["ok", "AI ready"], loading: ["warm", "Loading AI"], sleeping: ["", "AI asleep"],
+  "no-model": ["bad", "No AI model"], error: ["bad", "AI error"], "no-engine": ["bad", "Engine missing"],
+  offline: ["bad", "Ollama offline"], missing: ["warm", "Models missing"],
+};
+let statusTimer = null;
 async function refreshStatus() {
   try {
     state.status = await get("/api/status");
     state.desktop = state.status.desktop;
   } catch (e) {
-    state.status = { ollama: false, ollama_error: e.message, models: [], missing: [] };
+    state.status = { ai: { provider: "?", state: "error", error: e.message } };
   }
-  const dot = document.getElementById("conn-dot");
-  const label = document.getElementById("conn-label");
-  const ok = state.status.ollama;
-  dot.className = "dot " + (ok ? (state.status.missing.length ? "" : "ok") : "bad");
-  label.textContent = ok ? (state.status.missing.length ? "Models missing" : "Ollama") : "Offline";
-  document.getElementById("conn").title = ok
-    ? `Ollama ${state.status.ollama_version || ""}, ${state.status.models.length} models` +
-      (state.status.missing.length ? `\nMissing: ${state.status.missing.join(", ")}` : "")
-    : state.status.ollama_error;
+  const ai = state.status.ai || {};
+  const [cls, text] = AI_LABEL[ai.state] || ["", ai.state];
+  document.getElementById("conn-dot").className = "dot " + cls;
+  document.getElementById("conn-label").textContent = ai.provider === "ollama" && ai.state === "ready" ? "Ollama" : text;
+  const e = ai.engine || {};
+  document.getElementById("conn").title = ai.provider === "ollama"
+    ? (ai.error || `Ollama ${ai.ollama_version || ""}` + (ai.missing?.length ? `\nMissing: ${ai.missing.join(", ")}` : ""))
+    : [ai.chat_model ? ai.chat_model.name : "No answer model", e.label, ai.error].filter(Boolean).join("\n");
   bus.emit("status", state.status);
+  maybeShowSetup();
+  // poll quickly while something is changing (model loading or downloading), slowly otherwise
+  const busy = ai.state === "loading" || Object.values(ai.downloads || {}).some((d) => d.status === "running" || d.status === "queued");
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(refreshStatus, busy ? 1500 : 12000);
 }
 bus.on("status:refresh", refreshStatus);
 document.getElementById("conn").addEventListener("click", () => show("settings"));
@@ -139,12 +150,12 @@ document.addEventListener("click", (e) => {
   await refreshSources();
   loop(refreshSources, 1200, 6000, () => busyLibrary);
   loop(refreshJobs, 800, 4000, () => busyJobs);
-  setInterval(refreshStatus, 15000);
   let start = "library";
   try { start = localStorage.getItem("lk:view") || "library"; } catch { /* */ }
   if (!state.sources.length) start = "library";
   show(start);
-  if (state.status && !state.status.ollama) {
-    toast("Can't reach Ollama. Ask and indexing need it — check the URL in Settings.", true, 8000);
+  const ai = state.status?.ai;
+  if (ai && ai.provider === "ollama" && ai.state === "offline") {
+    toast("Can't reach the Ollama server. Check its address in Settings, or switch to the built-in engine.", true, 8000);
   }
 })();

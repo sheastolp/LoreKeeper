@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .. import ff, ollama
+from .. import ai, ff
 from ..config import LIBRARY_DIR, get_settings
 from ..db import db
 from ..jobs import Job, jobs
@@ -144,13 +144,16 @@ def embed_source(job: Job, sid: str, warnings: list[str], p0: float = 0.0) -> No
     if not rows:
         return
     job.update(p0, f"Embedding {len(rows)} chunks")
+    src = db.source(sid) or {}
+    title = (src.get("meta") or {}).get("doc_title") or src.get("title")
     try:
-        vecs = ollama.embed([r["text"] for r in rows])
+        vecs = ai.embed([r["text"] for r in rows], titles=[title] * len(rows))
         db.set_embeddings([r["id"] for r in rows], vecs)
-        db.merge_meta(sid, {"embed_model": get_settings()["embed_model"], "embed_dim": int(vecs.shape[1])})
+        space = ai.embed_model_id()
+        db.merge_meta(sid, {"embed_model": space.split(":", 1)[1], "embed_space": space, "embed_dim": int(vecs.shape[1])})
     except Exception as exc:
         warnings.append(f"Semantic index skipped ({exc}). Keyword search still works; "
-                        f"re-index after pulling the embedding model.")
+                        f"rebuild the semantic index from Settings → AI once the search model is available.")
 
 
 # ------------------------------------------------------------------ kinds
@@ -175,7 +178,7 @@ def _ingest_document(job: Job, sid: str, path: Path, warnings: list[str]) -> lis
                 warnings.append("Scanned pages found but PDF rendering is unavailable.")
                 break
             try:
-                pages[idx] = ollama.describe_image(
+                pages[idx] = ai.describe_image(
                     jpg, "Transcribe all text on this document page exactly, preserving reading order. "
                          "Describe any figures briefly in [brackets]. Output only the transcription.")
             except Exception as exc:
@@ -203,7 +206,7 @@ def _ingest_image(job: Job, sid: str, path: Path, warnings: list[str]) -> list[d
     if facts.get("datetime"):
         fact_line += f", taken {facts['datetime']}"
     try:
-        desc = ollama.describe_image(images.to_jpeg(im), images.IMAGE_PROMPT)
+        desc = ai.describe_image(images.to_jpeg(im), images.IMAGE_PROMPT)
     except Exception as exc:
         warnings.append(f"Image description skipped: {exc}")
         desc = ""

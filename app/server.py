@@ -6,6 +6,7 @@ import mimetypes
 import os
 import secrets
 import subprocess
+import threading
 import time
 from pathlib import Path
 from urllib.parse import unquote
@@ -13,7 +14,8 @@ from urllib.parse import unquote
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from . import ollama, qa
+from . import ai, engine, models, ollama, qa
+from . import search as search_mod
 from .config import (APP_VERSION, DERIVED_DIR, IS_WINDOWS, ffmpeg_bin, get_settings, resource_root,
                      update_settings)
 from .db import db
@@ -81,27 +83,21 @@ def static(name: str):
 @app.get("/api/status")
 def status():
     try:
-        models = ollama.list_models()
-        ok, err = True, None
-    except Exception as exc:
-        models, ok, err = [], False, str(exc)
-    try:
         ffmpeg_bin()
         ff_ok = True
     except Exception:
         ff_ok = False
-    names = {m["name"] for m in models}
-    s = get_settings()
-
-    def have(n: str) -> bool:
-        return n in names or (":" not in n and f"{n}:latest" in names)
-
+    try:
+        stale = search_mod.stale_sources()
+    except Exception:
+        stale = 0
     return {
-        "version": APP_VERSION, "ollama": ok, "ollama_error": err, "ollama_version": ollama.version() if ok else None,
-        "models": models, "ffmpeg": ff_ok, "settings": s,
-        "missing": [n for n in (s["chat_model"], s["vision_model"], s["embed_model"]) if ok and not have(n)],
-        "desktop": bool(os.environ.get("LOREKEEPER_DESKTOP")),
+        "version": APP_VERSION, "ffmpeg": ff_ok, "settings": get_settings(), "ai": ai.status(),
+        "stale_vectors": stale, "desktop": bool(os.environ.get("LOREKEEPER_DESKTOP")),
     }
+
+
+ENGINE_KEYS = {"provider", "local_chat_model", "local_embed_model", "gpu_mode", "threads", "idle_sleep_min", "num_ctx"}
 
 
 @app.get("/api/settings")
@@ -111,7 +107,100 @@ def get_s():
 
 @app.post("/api/settings")
 def set_s(patch: dict = Body(...)):
-    return update_settings(patch)
+    before = get_settings()
+    after = update_settings(patch)
+    if any(before.get(k) != after.get(k) for k in ENGINE_KEYS):
+        _rewarm()
+    return after
+
+
+def _rewarm():
+    """Engine settings changed: reload in the background so the next question doesn't wait."""
+    def work():
+        if ai.provider() == "ollama":
+            engine.stop_all()      # free the built-in engine's memory when Ollama takes over
+        else:
+            ai.warm_up()
+    threading.Thread(target=work, daemon=True).start()
+
+
+# ------------------------------------------------------------------ built-in AI engine
+
+@app.get("/api/ai/models")
+def ai_models():
+    r = models.resolve()
+    return {
+        "local": models.local_models(), "catalog": models.catalog_view(),
+        "selected": {"chat": r["chat"]["path"] if r["chat"] else None, "mmproj": r["mmproj"],
+                     "embed": r["embed"]["path"] if r["embed"] else None},
+        "ram_gb": models.total_ram_gb(), "recommended": models.recommended_preset(),
+        "engine_version": engine.engine_version(), "downloads": models.active_downloads(),
+    }
+
+
+@app.post("/api/ai/download")
+def ai_download(body: dict = Body(...)):
+    try:
+        return models.start_download(body.get("preset") or models.recommended_preset()).to_dict()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/ai/import")
+def ai_import(body: dict = Body(...)):
+    paths = [p for p in (body.get("paths") or []) if p]
+    if not paths:
+        raise HTTPException(400, "Pick a .gguf file first")
+    res = models.import_paths(paths)
+    chats = [a for a in res["added"] if a["role"] == "chat"]
+    if chats and body.get("use", True):
+        update_settings({"local_chat_model": chats[0]["path"], "provider": "builtin"})
+        _rewarm()
+    return res
+
+
+@app.post("/api/ai/forget")
+def ai_forget(body: dict = Body(...)):
+    path = body.get("path") or ""
+    if get_settings().get("local_chat_model") == path:
+        update_settings({"local_chat_model": ""})
+    if get_settings().get("local_embed_model") == path:
+        update_settings({"local_embed_model": ""})
+    if engine.chat.model_path == path or engine.embed.model_path == path:
+        engine.stop_all()
+    models.forget(path, delete_file=bool(body.get("delete")))
+    return {"ok": True}
+
+
+@app.post("/api/ai/use")
+def ai_use(body: dict = Body(...)):
+    patch = {}
+    if "chat" in body:
+        patch["local_chat_model"] = body["chat"] or ""
+    if "embed" in body:
+        patch["local_embed_model"] = body["embed"] or ""
+    if body.get("builtin"):
+        patch["provider"] = "builtin"
+    return set_s(patch)
+
+
+@app.post("/api/ai/restart")
+def ai_restart():
+    engine.stop_all()
+    _rewarm()
+    return {"ok": True}
+
+
+@app.post("/api/ai/unload")
+def ai_unload():
+    engine.stop_all()
+    return {"ok": True}
+
+
+@app.get("/api/ai/log")
+def ai_log(server: str = "chat"):
+    srv = engine.embed if server == "embed" else engine.chat
+    return {"lines": list(srv.log)[-300:], "info": srv.info()}
 
 
 @app.post("/api/models/pull")
@@ -125,6 +214,24 @@ def pull(body: dict = Body(...)):
         return {"model": name}
 
     return jobs.submit("pull", f"Pull {name}", work).to_dict()
+
+
+@app.get("/api/ollama/models")
+def ollama_models():
+    try:
+        return {"models": ollama.list_models(), "version": ollama.version()}
+    except Exception as exc:
+        return {"models": [], "error": str(exc)}
+
+
+def boot() -> None:
+    """Runs once at launch: honour the installer's model choice, then warm the engine up."""
+    choice = models.consume_installer_choice()          # "auto", a preset id, or "none"
+    if choice == "auto":
+        choice = models.recommended_preset()
+    if choice and models.preset(choice) and not models.installed(models.preset(choice)) and not models.resolve()["chat"]:
+        models.start_download(choice)
+    threading.Thread(target=ai.warm_up, daemon=True, name="warmup").start()
 
 
 # ------------------------------------------------------------------ library

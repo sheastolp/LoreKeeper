@@ -56,6 +56,14 @@ def start_server(port: int):
     return server
 
 
+def _shutdown_engine() -> None:
+    try:
+        from . import engine
+        engine.stop_all()
+    except Exception:
+        pass
+
+
 class DesktopAPI:
     """Functions the page can call through window.pywebview.api.*"""
 
@@ -68,6 +76,12 @@ class DesktopAPI:
                  "*.m4a;*.aac;*.flac;*.ogg;*.opus;*.jpg;*.jpeg;*.png;*.webp;*.gif;*.bmp;*.tif;*.tiff;*.pdf;*.docx;"
                  "*.pptx;*.txt;*.md;*.html;*.htm;*.csv;*.json;*.srt;*.vtt)", "All files (*.*)")
         res = self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=types)
+        return list(res or [])
+
+    def pick_models(self):
+        import webview
+        res = self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
+                                             file_types=("GGUF models (*.gguf)", "All files (*.*)"))
         return list(res or [])
 
     def pick_folder(self):
@@ -139,13 +153,57 @@ def selftest(out_path: str) -> int:
 
     def _whisper():
         import numpy as np
-        from faster_whisper import WhisperModel
-        from .config import MODELS_DIR
-        m = WhisperModel("tiny", device="cpu", compute_type="int8", download_root=str(MODELS_DIR / "whisper"))
+        from .ingest.media import load_whisper
+        from .config import resource_root
+        bundled = (resource_root() / "vendor" / "whisper" / "base" / "model.bin").exists()
+        m = load_whisper()            # default size is base, which ships in the bundle
         t = np.linspace(0, 2, 32000, dtype=np.float32)
         segs, info = m.transcribe(0.1 * np.sin(2 * np.pi * 440 * t), vad_filter=True, word_timestamps=True)
         list(segs)
-        return f"tiny model ran, lang guess {info.language}"
+        if getattr(sys, "frozen", False) and not bundled:
+            raise RuntimeError("Whisper base is missing from vendor/whisper/base")
+        return f"whisper ran (bundled base: {bundled}), lang guess {info.language}"
+
+    def _engine_embed():
+        from . import ai, engine, models
+        if not engine.server_binary():
+            raise RuntimeError("llama-server not found in vendor/llama")
+        r = models.resolve()
+        if not r["embed"]:
+            raise RuntimeError("bundled embedding model not found in vendor/models")
+        v = ai.embed(["Cold iron is anathema to the fey.", "Frost nova cooldown is eight seconds."])
+        q = ai.embed(["what hurts fey creatures?"], is_query=True)
+        sims = (v @ q[0]).round(3).tolist()
+        if v.shape[1] < 64 or sims[0] <= sims[1]:
+            raise RuntimeError(f"embeddings look wrong: dim {v.shape[1]}, sims {sims}")
+        return f"{engine.engine_version()}, {r['embed']['file']}, dim {v.shape[1]}, query sims {sims}"
+
+    def _engine_chat():
+        """Optional: LK_TEST_CHAT_MODEL / LK_TEST_MMPROJ point at a tiny VLM fetched only in CI."""
+        model, proj = os.environ.get("LK_TEST_CHAT_MODEL"), os.environ.get("LK_TEST_MMPROJ")
+        if not model:
+            return "skipped (no LK_TEST_CHAT_MODEL)"
+        import io
+        from PIL import Image, ImageDraw
+        from . import ai, engine
+        from .config import update_settings
+        update_settings({"local_chat_model": model, "provider": "builtin"})
+        from . import models
+        models.import_paths([p for p in (model, proj) if p])
+        out = ai.chat_once([{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=8)
+        detail = f"text: {out[:40]!r}"
+        if proj:
+            im = Image.new("RGB", (320, 200), "white")
+            ImageDraw.Draw(im).rectangle([40, 40, 280, 160], fill=(220, 30, 30))
+            buf = io.BytesIO()
+            im.save(buf, "JPEG")
+            desc = ai.describe_image(buf.getvalue(), "What color is the shape? One word.")
+            detail += f", vision: {desc[:60]!r}"
+        info = engine.chat.info()
+        engine.stop_all()
+        if not out:
+            raise RuntimeError("empty reply from chat model")
+        return f"{detail}, backend {info['backend']}"
 
     def _server():
         import httpx
@@ -158,8 +216,10 @@ def selftest(out_path: str) -> int:
         assert "Lorekeeper" in idx.text, "index.html missing from bundle"
         return f"status {r.status_code}, ffmpeg={r.json()['ffmpeg']}"
 
-    for name, fn in (("imports", _imports), ("ffmpeg", _ffmpeg), ("whisper", _whisper), ("server", _server)):
+    for name, fn in (("imports", _imports), ("ffmpeg", _ffmpeg), ("whisper", _whisper), ("server", _server),
+                     ("engine_embed", _engine_embed), ("engine_chat", _engine_chat)):
         check(name, fn)
+    _shutdown_engine()
     report["result"] = "PASS" if ok else "FAIL"
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2)
@@ -180,7 +240,10 @@ def main() -> None:
     if not browser:
         os.environ["LOREKEEPER_DESKTOP"] = "1"
     server = start_server(port)
-    from .server import TOKEN
+    import atexit
+    atexit.register(_shutdown_engine)
+    from .server import TOKEN, boot
+    threading.Thread(target=boot, daemon=True, name="boot").start()
     url = f"http://127.0.0.1:{port}/?t={TOKEN}"
     logging.info("%s %s listening on 127.0.0.1:%s", APP_NAME, APP_VERSION, port)
 
@@ -192,6 +255,7 @@ def main() -> None:
                 time.sleep(1)
         except KeyboardInterrupt:
             server.should_exit = True
+        _shutdown_engine()
         return
 
     import webview
@@ -202,6 +266,7 @@ def main() -> None:
     window.events.loaded += lambda: _bind_native_drop(window)
     webview.start(private_mode=False, storage_path=str(LOG_DIR.parent / "webview"))
     server.should_exit = True
+    _shutdown_engine()
 
 
 if __name__ == "__main__":

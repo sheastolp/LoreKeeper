@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Iterator
 
-from . import ollama
+from . import ai
 from .config import get_settings
 from .ingest.media import fmt_ts
 from .search import search
@@ -100,7 +100,7 @@ def answer_stream(question: str, history: list[dict] | None = None,
         "Answer with the four sections (The Answer, The How, The Why, Deep Cut) and cite sources as [S#].")})
 
     first = None
-    for ev in ollama.chat_stream(messages):
+    for ev in ai.chat_stream(messages):
         if ev["type"] == "token" and first is None:
             first = time.time()
             ev["ttft_ms"] = round((first - t0) * 1000)

@@ -4,13 +4,10 @@ Notes worth knowing:
 * Thinking models (qwen3, deepseek-r1) may ignore think:false, so every stream
   goes through ThinkFilter, which strips <think>...</think> even when the tag is
   split across two network chunks.
-* nomic-embed-text and friends were trained with task prefixes. Embedding a
-  question with "search_query:" and passages with "search_document:" lands
-  them in the matching halves of the vector space; skipping it costs recall.
+* Embedding task prefixes are applied by app.ai before texts reach embed_raw().
 """
 from __future__ import annotations
 
-import base64
 import json
 from typing import Iterator
 
@@ -97,29 +94,12 @@ def pull_model(name: str, on_progress=None) -> None:
 
 # ------------------------------------------------------------------ embeddings
 
-_PREFIXES = {
-    # model-name fragment: (document prefix, query prefix)
-    "nomic-embed": ("search_document: ", "search_query: "),
-    "mxbai-embed": ("", "Represent this sentence for searching relevant passages: "),
-    "snowflake-arctic-embed": ("", "Represent this sentence for searching relevant passages: "),
-    "bge-": ("", "Represent this sentence for searching relevant passages: "),
-}
-
-
-def _prefix(model: str, is_query: bool) -> str:
-    for frag, (doc, query) in _PREFIXES.items():
-        if frag in model:
-            return query if is_query else doc
-    return ""
-
-
-def embed(texts: list[str], is_query: bool = False, batch: int = 24) -> np.ndarray:
-    """Return L2-normalised float32 vectors, shape (n, dim)."""
+def embed_raw(texts: list[str], batch: int = 24) -> np.ndarray:
+    """Embed already-prefixed texts; returns L2-normalised float32 vectors, shape (n, dim)."""
     model = get_settings()["embed_model"]
-    pre = _prefix(model, is_query)
     vecs: list[list[float]] = []
     for i in range(0, len(texts), batch):
-        part = [pre + t[:6000] for t in texts[i:i + batch]]
+        part = texts[i:i + batch]
         try:
             r = httpx.post(_url("/api/embed"), json={"model": model, "input": part, "truncate": True},
                            timeout=httpx.Timeout(30, read=300))
@@ -278,7 +258,3 @@ def chat_once(messages: list[dict], model: str | None = None, images_b64: list[s
     return (f.feed(text) + f.flush()).strip()
 
 
-def describe_image(jpeg_bytes: bytes, prompt: str) -> str:
-    model = get_settings()["vision_model"]
-    b64 = base64.b64encode(jpeg_bytes).decode()
-    return chat_once([{"role": "user", "content": prompt}], model=model, images_b64=[b64])

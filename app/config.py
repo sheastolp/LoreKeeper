@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 
 APP_NAME = "Lorekeeper"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 IS_WINDOWS = os.name == "nt"
 FROZEN = getattr(sys, "frozen", False)
 
@@ -58,8 +58,15 @@ def default_export_dir() -> str:
 
 
 DEFAULTS = {
+    # which brain answers: the bundled llama.cpp engine, or an Ollama server you run yourself
+    "provider": "builtin",
+    "local_chat_model": "",          # path to a chat GGUF ("" = pick automatically)
+    "local_embed_model": "",         # path to an embedding GGUF ("" = bundled EmbeddingGemma 2)
+    "gpu_mode": "auto",              # auto = llama.cpp fits as many layers as VRAM allows; cpu = no GPU
+    "threads": 0,                    # 0 = llama.cpp decides
+    "idle_sleep_min": 10,            # unload the model after this many idle minutes (0 = never)
     "ollama_url": "http://127.0.0.1:11434",
-    "chat_model": "llama3.2:3b",
+    "chat_model": "llama3.2:3b",     # Ollama model names (used when provider = ollama)
     "vision_model": "gemma3:4b",
     "embed_model": "nomic-embed-text",
     "num_ctx": 8192,

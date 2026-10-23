@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import ff
-from ..config import DERIVED_DIR, MODELS_DIR, ffmpeg_bin, get_settings, popen_kwargs, run_quiet
+from ..config import DERIVED_DIR, MODELS_DIR, ffmpeg_bin, get_settings, popen_kwargs, resource_root, run_quiet
 from ..jobs import Job
 
 
@@ -130,6 +130,9 @@ def load_whisper():
             return _whisper_cache[key]
         from faster_whisper import WhisperModel
         root = str(MODELS_DIR / "whisper")
+        bundled = resource_root() / "vendor" / "whisper" / size
+        if (bundled / "model.bin").exists():      # shipped in the installer: works offline from day one
+            size = str(bundled)
         threads = max(1, (os.cpu_count() or 4) - 1)
         if device in ("cuda", "auto"):
             try:
@@ -230,7 +233,7 @@ FRAME_PROMPT = (
 
 def caption_keyframes(sid: str, path: str, duration: float, job: Job, p0: float, p1: float,
                       warnings: list[str]) -> list[dict]:
-    from .. import ollama
+    from .. import ai
     s = get_settings()
     n = min(int(s["max_keyframes"]), max(3, int(duration // 20) + 3))
     if n <= 0:
@@ -247,7 +250,7 @@ def caption_keyframes(sid: str, path: str, duration: float, job: Job, p0: float,
             continue
         (frames_dir / f"{int(t * 1000):09d}.jpg").write_bytes(jpg)
         try:
-            desc = ollama.describe_image(jpg, FRAME_PROMPT.format(ts=fmt_ts(t)))
+            desc = ai.describe_image(jpg, FRAME_PROMPT.format(ts=fmt_ts(t)))
         except Exception as exc:  # vision model missing/unreachable: keep the transcript, note it
             warnings.append(f"Frame captions skipped: {exc}")
             break

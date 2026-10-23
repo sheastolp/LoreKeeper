@@ -25,25 +25,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      # FFmpeg, llama.cpp, EmbeddingGemma 2 and Whisper base are big and rarely change: cache them
+      - name: Cache bundled components
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor
+            ci-models
+          key: vendor-${{ hashFiles('packaging/fetch_vendor.py', 'packaging/fetch_ffmpeg.ps1') }}
+
       - name: Fetch FFmpeg
         shell: pwsh
         run: ./packaging/fetch_ffmpeg.ps1
+
+      - name: Fetch AI engine and models (llama.cpp, EmbeddingGemma 2, Whisper base)
+        run: python packaging/fetch_vendor.py --test-models ci-models
 
       - name: Work out version
         id: ver
         shell: pwsh
         run: |
-          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "1.0.${{ github.run_number }}" }
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "1.1.${{ github.run_number }}" }
           "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Build app (PyInstaller)
         run: pyinstaller packaging/lorekeeper.spec --noconfirm --clean
 
+      # Runs the frozen exe: imports, FFmpeg, Whisper, the local server, embeddings through the bundled
+      # llama-server, and a chat + vision round trip with a tiny test model (CPU; runners have no GPU).
       - name: Self-test the frozen build
         shell: pwsh
+        env:
+          LK_TEST_CHAT_MODEL: ${{ github.workspace }}\ci-models\SmolVLM2-256M-Video-Instruct-Q8_0.gguf
+          LK_TEST_MMPROJ: ${{ github.workspace }}\ci-models\mmproj-SmolVLM2-256M-Video-Instruct-Q8_0.gguf
+          LOREKEEPER_HOME: ${{ runner.temp }}\lk-selftest
         run: |
           $p = Start-Process -FilePath "dist\Lorekeeper\Lorekeeper.exe" -ArgumentList "--selftest", "$env:RUNNER_TEMP\selftest.json" -PassThru -Wait
           Get-Content "$env:RUNNER_TEMP\selftest.json"
+          if (Test-Path "$env:RUNNER_TEMP\lk-selftest\logs") { Get-ChildItem "$env:RUNNER_TEMP\lk-selftest\logs" | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName -Tail 40 } }
           if ($p.ExitCode -ne 0) { throw "Self-test failed (exit $($p.ExitCode))" }
 
       - name: Build installer (Inno Setup)
@@ -56,6 +75,7 @@ jobs:
           if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" packaging\installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem dist\Lorekeeper-Setup-*.exe | ForEach-Object { "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
 
       - uses: actions/upload-artifact@v4
         with:
