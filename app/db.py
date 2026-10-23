@@ -74,6 +74,51 @@ CREATE TABLE IF NOT EXISTS projects (
     data        TEXT NOT NULL,
     updated_at  REAL NOT NULL
 );
+
+-- voiceprints: one row per analysed VOD; window embeddings are float16 N x D matrices
+CREATE TABLE IF NOT EXISTS voice_index (
+    source_id   TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+    model       TEXT NOT NULL,
+    dim         INTEGER NOT NULL,
+    n           INTEGER NOT NULL,
+    starts      BLOB NOT NULL,
+    ends        BLOB NOT NULL,
+    loud        BLOB NOT NULL,
+    embs        BLOB NOT NULL,
+    created_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS people (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    centroid    BLOB NOT NULL,
+    samples     BLOB NOT NULL,          -- float16 matrix of sample windows (for kNN scoring)
+    n_samples   INTEGER NOT NULL,
+    seconds     REAL NOT NULL,
+    sources     TEXT NOT NULL DEFAULT '[]',
+    threshold   REAL NOT NULL DEFAULT 0.4,
+    created_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS clips (
+    id          TEXT PRIMARY KEY,
+    run_id      TEXT NOT NULL,
+    person_id   TEXT,
+    source_id   TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    start       REAL NOT NULL,
+    end         REAL NOT NULL,
+    score       REAL NOT NULL,
+    ai_score    REAL,
+    title       TEXT NOT NULL,
+    why         TEXT,
+    signals     TEXT NOT NULL DEFAULT '{}',
+    transcript  TEXT,
+    status      TEXT NOT NULL DEFAULT 'new',     -- new | kept | dismissed
+    exports     TEXT NOT NULL DEFAULT '[]',
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_clips_run ON clips(run_id, score DESC);
 """
 
 

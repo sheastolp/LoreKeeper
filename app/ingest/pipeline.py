@@ -237,13 +237,20 @@ def _ingest_media(job: Job, sid: str, path: str, kind: str, warnings: list[str])
 
     chunks: list[dict] = []
     if info.get("has_audio"):
-        t_end = 0.8 if (kind == "video" and get_settings()["caption_frames"] and int(get_settings()["max_keyframes"]) > 0) else 0.9
+        t_end = 0.74 if (kind == "video" and get_settings()["caption_frames"] and int(get_settings()["max_keyframes"]) > 0) else 0.84
         tr = media.transcribe(path, dur, job, 0.26, t_end)
         db.save_transcript(sid, tr["language"], tr["segments"], tr["words"])
         db.merge_meta(sid, {"language": tr["language"], "words": len(tr["words"])})
         chunks += chunker.chunk_transcript(tr["segments"])
         if not tr["segments"]:
             warnings.append("No speech detected.")
+        else:
+            # voiceprints: who's talking when (powers 'find clips of a person')
+            try:
+                from .. import voice
+                voice.build_index(sid, job, t_end, t_end + 0.06)
+            except Exception as exc:
+                warnings.append(f"Voiceprints skipped ({exc}); clip finding will build them later.")
     if kind == "video" and get_settings()["caption_frames"] and int(get_settings()["max_keyframes"]) > 0 and dur:
         chunks += media.caption_keyframes(sid, path, dur, job, 0.8, 0.92, warnings)
     chunks.sort(key=lambda c: (c.get("start") or 0))

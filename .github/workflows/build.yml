@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      # FFmpeg, llama.cpp, EmbeddingGemma 2 and Whisper base are big and rarely change: cache them
+      # FFmpeg, llama.cpp, EmbeddingGemma 2, Whisper base and the voice model are big and rarely change: cache them
       - name: Cache bundled components
         uses: actions/cache@v4
         with:
@@ -38,20 +38,20 @@ jobs:
         shell: pwsh
         run: ./packaging/fetch_ffmpeg.ps1
 
-      - name: Fetch AI engine and models (llama.cpp, EmbeddingGemma 2, Whisper base)
+      - name: Fetch AI engine and models (llama.cpp, EmbeddingGemma 2, Whisper base, CAM++ voiceprints)
         run: python packaging/fetch_vendor.py --test-models ci-models
 
       - name: Work out version
         id: ver
         shell: pwsh
         run: |
-          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "1.1.${{ github.run_number }}" }
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "1.2.${{ github.run_number }}" }
           "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Build app (PyInstaller)
         run: pyinstaller packaging/lorekeeper.spec --noconfirm --clean
 
-      # Runs the frozen exe: imports, FFmpeg, Whisper, the local server, embeddings through the bundled
+      # Runs the frozen exe: imports, FFmpeg, Whisper, the local server, voiceprints + caption rendering, embeddings through the bundled
       # llama-server, and a chat + vision round trip with a tiny test model (CPU; runners have no GPU).
       - name: Self-test the frozen build
         shell: pwsh

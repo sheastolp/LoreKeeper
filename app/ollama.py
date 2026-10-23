@@ -237,7 +237,7 @@ def _consume(r: httpx.Response, filt: ThinkFilter) -> Iterator[dict]:
 
 
 def chat_once(messages: list[dict], model: str | None = None, images_b64: list[str] | None = None,
-              options: dict | None = None, timeout: float = 300) -> str:
+              options: dict | None = None, timeout: float = 300, fmt: dict | None = None) -> str:
     s = get_settings()
     model = model or s["chat_model"]
     msgs = [dict(m) for m in messages]
@@ -245,6 +245,8 @@ def chat_once(messages: list[dict], model: str | None = None, images_b64: list[s
         msgs[-1]["images"] = images_b64
     payload = {"model": model, "messages": msgs, "stream": False, "think": False,
                "options": {"num_ctx": min(s["num_ctx"], 8192), "temperature": 0.2, **(options or {})}}
+    if fmt:
+        payload["format"] = fmt          # Ollama structured outputs
     try:
         r = httpx.post(_url("/api/chat"), json=payload, timeout=httpx.Timeout(30, read=timeout))
         if r.status_code == 400 and "think" in r.text.lower():

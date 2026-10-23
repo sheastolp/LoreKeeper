@@ -84,12 +84,13 @@ def _looks_like_path(a: str) -> bool:
 
 
 def run(args: list[str], job: Job | None = None, duration: float | None = None,
-        p0: float = 0.0, p1: float = 1.0, label: str = "") -> None:
-    """Run ffmpeg with -progress parsing. `args` excludes the binary itself."""
+        p0: float = 0.0, p1: float = 1.0, label: str = "", cwd: str | None = None) -> None:
+    """Run ffmpeg with -progress parsing. `args` excludes the binary itself.
+    cwd lets filters reference files by short relative names (no Windows drive-letter escaping)."""
     cmd = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-y", "-progress", "pipe:1", "-nostats", *args]
     if job:
         job.write("$ " + pretty_cmd(cmd))
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd,
                             text=True, encoding="utf-8", errors="replace", **popen_kwargs())
     if job:
         job.proc = proc

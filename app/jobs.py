@@ -77,6 +77,8 @@ class JobManager:
             "ingest": ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest"),
             "render": ThreadPoolExecutor(max_workers=1, thread_name_prefix="render"),
             "misc": ThreadPoolExecutor(max_workers=2, thread_name_prefix="misc"),
+            "download": ThreadPoolExecutor(max_workers=2, thread_name_prefix="download"),
+            "clips": ThreadPoolExecutor(max_workers=1, thread_name_prefix="clips"),
         }
         self.lock = threading.Lock()
 

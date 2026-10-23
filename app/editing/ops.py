@@ -38,10 +38,10 @@ class Ctx:
         self.explain = ""
 
     def ffmpeg(self, args: list[str], duration: float | None = None, label: str = "",
-               p0: float = 0.0, p1: float = 1.0) -> None:
+               p0: float = 0.0, p1: float = 1.0, cwd: str | None = None) -> None:
         self.commands.append(ff.pretty_cmd([ffmpeg_bin(), *args]))
         if not self.dry:
-            ff.run(args, job=self.job, duration=duration, p0=p0, p1=p1, label=label)
+            ff.run(args, job=self.job, duration=duration, p0=p0, p1=p1, label=label, cwd=cwd)
 
     def update(self, p: float, msg: str) -> None:
         if self.job and not self.dry:
@@ -518,7 +518,13 @@ def transcript_keeps(words: list[dict], deleted: list[int], duration: float, pad
     return keep_from_removals(removals, duration)
 
 
+def _export_clip(ctx: Ctx, p: dict) -> None:
+    from .clipexport import export_clip   # late import: clipexport imports this module
+    export_clip(ctx, p)
+
+
 OPS = {
+    "export_clip": _export_clip,
     "trim": trim, "split": split, "merge": merge, "speed": speed, "volume": volume, "convert": convert,
     "extract_audio": extract_audio, "denoise": denoise, "normalize": normalize,
     "cut_silences": cut_silences, "transcript_cut": transcript_cut,

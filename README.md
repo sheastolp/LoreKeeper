@@ -13,6 +13,7 @@ Every answer comes back in four parts: **The Answer**, **The How**, **The Why**,
 | **Ask** | Hybrid search (BM25 keywords + vector meaning, merged with Reciprocal Rank Fusion), streamed answers, clickable sources, retrieval telemetry, follow-up questions, scope to selected items |
 | **Studio** | Trim, split, speed, merge, volume, denoise, loudness normalize (EBU R128), cut dead air, convert (MP4/WebM/MOV/MKV/GIF/MP3/WAV/FLAC/M4A/Opus), extract audio. Each tool shows the exact FFmpeg command it will run |
 | **Edit by transcript** | Strike words to cut them from the video, auto-strike fillers, find and strike, export SRT/VTT captions (re-timed to match your cuts) |
+| **Clips** | Pick a person; Lorekeeper finds them in your VODs **by voice**, scores every moment they're in (talk share, loud reactions, pace, laughs), and the local AI picks, titles and tightens the best ones. Review, nudge, rename, then export each clip as 16:9 or vertical 9:16 (crop with a focus slider, or whole frame over a blurred fill) with word-by-word burned-in captions. Pulls VODs straight from a Twitch channel, whole or just a time range |
 | **Timeline** | V1 main + V2 overlay (picture-in-picture: facecams, logos), two audio tracks, drag/trim/split/ripple delete, fades, volume, snapping, undo/redo, 16:9 / vertical / square canvases, draft or final renders |
 
 ## Getting the installer (GitHub Actions)
@@ -43,6 +44,19 @@ Why isn't the model inside the installer? GitHub caps release files at 2 GB and 
 **GPU:** the engine is llama.cpp's Vulkan build, so it uses NVIDIA, AMD and Intel GPUs alike and falls back to the CPU when there's none. It measures free VRAM and offloads as many layers as fit. *Free memory when idle* (default 10 min) unloads the model so your games get the VRAM back; it reloads on the next question. Settings shows which device it's using and how many layers made it onto the GPU.
 
 **Prefer Ollama?** Settings → AI → *Ollama server* switches every AI call to an Ollama server instead (this PC, or your AI box over Tailscale).
+
+## Clips of a specific person
+
+1. **Get VODs in.** Clips → *Import from Twitch*: type a channel name (or paste a VOD link), tick past broadcasts, optionally give a time range like `1:30:00` to `2:15:00` so you only download that part. Or add recordings/OBS files in the Library. Every audio/video item is transcribed and voice-indexed automatically.
+2. **Teach it the person.** Clips → People → *Add*. Pick a VOD they're in and hit *Find the voices*: Lorekeeper groups all the talking by voice, you play a couple of samples and click *This is them*. Or tick a few of their lines in the transcript. *Teach more* adds examples later (a different mic or a different VOD makes it sharper).
+3. **Find clips.** Pick the VODs, a clip length (short 12–30 s, medium 25–60 s, long 50–120 s) and how many per VOD, then *Find clips*. The gold strip under each VOD shows where they're talking.
+4. **Review and export.** Arrow keys step through clips. Trim with ±1 s or *Here*, rename, then export 16:9 or vertical. *Keep* and *Dismiss* sort the pile.
+
+How it recognises voices: Whisper's word timestamps mark where people talk; every 2-second stretch becomes a 512-number voiceprint from the CAM++ speaker model (3D-Speaker, runs on the CPU in milliseconds). Stream audio makes everyone sound alike (game sound and music sit under every voice), so matching subtracts the average voiceprint of the stretches that sound *least* like the person, then lets the most confident matches in each VOD sharpen the person's voiceprint for that VOD. On a test stream built from real recorded speech over game noise and music, that cut wrong matches from about 1 in 5 to about 1 in 50. *Sensitivity* in a person's settings trades missed moments for wrong ones.
+
+How it picks highlights: clip-length windows where the person does at least a fifth of the talking are scored on their share of the talking, loudness spikes against the VOD's own baseline, speech pace, and excitement in the words. The best go to the local model with a speaker-labelled transcript; it rates each 1–10, writes a Shorts-style title, and picks the tightest setup-to-payoff span. With no model installed it still works, ranking by the sound signals and titling from the transcript.
+
+Clips are saved in the exports folder as `<Person> - <Title> - vertical|16x9 <time>.mp4`.
 
 ## Running from source
 
@@ -85,6 +99,7 @@ app/            Python backend (FastAPI on 127.0.0.1, token-locked)
   ingest/       extraction, Whisper, keyframes, chunking, pipeline
   editing/      FFmpeg recipes, transcript cuts, captions, timeline renderer
   engine.py     llama-server process manager    models.py  catalog, downloads, GGUF imports
+  voice.py      voiceprints, voice discovery    clips.py   highlight finder    twitch.py  VOD import
   ai.py         one front door: built-in engine or Ollama      gguf.py  GGUF header reader
   search.py     hybrid retrieval      qa.py   answer prompt + streaming
 web/            UI (vanilla JS modules, no build step)

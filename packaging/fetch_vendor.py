@@ -4,6 +4,7 @@
                      also carries every CPU backend, so it runs on any GPU or none at all)
   vendor/models/     EmbeddingGemma 2 (search), SHA-256 verified
   vendor/whisper/base/  Whisper base for faster-whisper (transcription, offline from day one)
+  vendor/voice/      CAM++ speaker model (3D-Speaker, Apache-2.0) for recognising people by voice
 
   python packaging/fetch_vendor.py [--test-models DIR]
 
@@ -29,6 +30,8 @@ VENDOR = ROOT / "vendor"
 
 EMBED = ("ggml-org/embeddinggemma-2-GGUF", "embeddinggemma-2-Q8_0.gguf", 309855456,
          "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135")
+VOICE = ("csukuangfj/speaker-embedding-models", "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx", 29596978,
+         "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b")
 TEST_MODELS = [
     ("ggml-org/SmolVLM2-256M-Video-Instruct-GGUF", "SmolVLM2-256M-Video-Instruct-Q8_0.gguf", 175056256,
      "1202d1c54493bddff5b0ecbc36fcb7520ff720b9fa3d7224aeb293581f90529a"),
@@ -107,6 +110,11 @@ def fetch_embed() -> None:
     download(f"https://huggingface.co/{repo}/resolve/main/{name}", VENDOR / "models" / name, size, sha)
 
 
+def fetch_voice() -> None:
+    repo, name, size, sha = VOICE
+    download(f"https://huggingface.co/{repo}/resolve/main/{name}", VENDOR / "voice" / name, size, sha)
+
+
 def fetch_whisper() -> None:
     out = VENDOR / "whisper" / "base"
     if (out / "model.bin").exists():
@@ -125,6 +133,7 @@ def main() -> None:
     print("Fetching bundled AI components into", VENDOR)
     fetch_llama()
     fetch_embed()
+    fetch_voice()
     if not a.skip_whisper:
         fetch_whisper()
     if a.test_models:

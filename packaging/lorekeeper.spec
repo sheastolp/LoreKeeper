@@ -10,7 +10,8 @@ datas, binaries, hiddenimports = [], [], []
 # Packages that ship DLLs, model assets or data files PyInstaller can't discover by import tracing.
 for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers", "huggingface_hub",
             "trafilatura", "justext", "courlan", "htmldate", "dateparser", "lxml",
-            "pptx", "docx", "pypdfium2", "pypdfium2_raw", "webview", "clr_loader", "pythonnet"):
+            "pptx", "docx", "pypdfium2", "pypdfium2_raw", "webview", "clr_loader", "pythonnet",
+            "kaldi_native_fbank", "yt_dlp"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -20,9 +21,9 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers", 
         print(f"[spec] skipping {pkg}: {exc}")
 
 hiddenimports += collect_submodules("uvicorn") + collect_submodules("app")
-datas += [(os.path.join(ROOT, "web"), "web")]
-# bundled binaries + models: ffmpeg, llama.cpp's llama-server, EmbeddingGemma 2, Whisper base
-for sub in ("ffmpeg", "llama", "models", os.path.join("whisper", "base")):
+datas += [(os.path.join(ROOT, "web"), "web"), (os.path.join(ROOT, "assets"), "assets")]
+# bundled binaries + models: ffmpeg, llama.cpp's llama-server, EmbeddingGemma 2, Whisper base, CAM++ voiceprints
+for sub in ("ffmpeg", "llama", "models", os.path.join("whisper", "base"), "voice"):
     src = os.path.join(ROOT, "vendor", sub)
     if os.path.isdir(src):
         datas.append((src, os.path.join("vendor", sub)))

@@ -182,11 +182,13 @@ def _backend_label(info: dict) -> str:
 
 
 def chat_once(messages: list[dict], images_jpeg: list[bytes] | None = None, max_tokens: int = 400,
-              temperature: float = 0.2) -> str:
+              temperature: float = 0.2, schema: dict | None = None) -> str:
+    """One-shot completion. With `schema`, output is grammar-constrained to that JSON schema
+    (llama.cpp compiles it to a GBNF grammar), so it always parses."""
     if provider() == "ollama":
         b64 = [base64.b64encode(b).decode() for b in images_jpeg] if images_jpeg else None
         model = get_settings()["vision_model"] if images_jpeg else None
-        return ollama.chat_once(messages, model=model, images_b64=b64)
+        return ollama.chat_once(messages, model=model, images_b64=b64, fmt=schema)
     srv = _chat_server(need_vision=bool(images_jpeg))
     msgs = [dict(m) for m in messages]
     if images_jpeg:
@@ -194,7 +196,9 @@ def chat_once(messages: list[dict], images_jpeg: list[bytes] | None = None, max_
                  for b in images_jpeg]
         msgs[-1]["content"] = parts + [{"type": "text", "text": msgs[-1]["content"]}]
     body = {"messages": msgs, "stream": False, "max_tokens": max_tokens, "temperature": temperature,
-            "chat_template_kwargs": {"enable_thinking": False}}
+            "chat_template_kwargs": {"enable_thinking": False}, "cache_prompt": True}
+    if schema:
+        body["response_format"] = {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}}
     try:
         r = httpx.post(srv.url + "/v1/chat/completions", headers=srv.headers, json=body,
                        timeout=httpx.Timeout(10, read=900))
@@ -210,6 +214,15 @@ def chat_once(messages: list[dict], images_jpeg: list[bytes] | None = None, max_
 
 def describe_image(jpeg: bytes, prompt: str) -> str:
     return chat_once([{"role": "user", "content": prompt}], images_jpeg=[jpeg], max_tokens=400)
+
+
+def available() -> bool:
+    """Can we call a chat model right now (without starting a download)?"""
+    try:
+        st = status()
+        return bool(st.get("ready"))
+    except Exception:
+        return False
 
 
 # ------------------------------------------------------------------ status

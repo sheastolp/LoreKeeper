@@ -4,9 +4,10 @@ import * as ask from "./ask.js";
 import * as studio from "./studio.js";
 import * as timeline from "./timeline.js";
 import * as settings from "./settings.js";
+import * as clips from "./clips.js";
 import { maybeShowSetup } from "./setup.js";
 
-const VIEWS = { library, ask, studio, timeline, settings };
+const VIEWS = { library, ask, studio, timeline, clips, settings };
 const containers = {};
 let current = null;
 

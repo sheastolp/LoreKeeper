@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
 
 from .config import APP_NAME, APP_VERSION, LOG_DIR, TMP_DIR
 
@@ -142,6 +143,7 @@ def selftest(out_path: str) -> int:
 
     def _imports():
         import av, ctranslate2, faster_whisper, numpy, onnxruntime, pypdf, pypdfium2, trafilatura  # noqa: F401
+        import kaldi_native_fbank, yt_dlp  # noqa: F401
         import docx, pptx, bs4, webview  # noqa: F401
         return f"faster-whisper {faster_whisper.__version__}, ctranslate2 {ctranslate2.__version__}"
 
@@ -177,6 +179,38 @@ def selftest(out_path: str) -> int:
         if v.shape[1] < 64 or sims[0] <= sims[1]:
             raise RuntimeError(f"embeddings look wrong: dim {v.shape[1]}, sims {sims}")
         return f"{engine.engine_version()}, {r['embed']['file']}, dim {v.shape[1]}, query sims {sims}"
+
+    def _voice_and_captions():
+        """Voiceprint model + fbank run, and libass renders captions with the bundled font."""
+        import numpy as np
+        import tempfile
+        from . import voice
+        from .config import ffmpeg_bin, popen_kwargs
+        from .editing.clipexport import _fonts_dir, build_ass
+        rng = np.random.default_rng(0)
+        t = np.arange(32000) / 16000
+        pcm = ((0.3 * np.sin(2 * np.pi * 180 * t) * (1 + 0.5 * np.sin(2 * np.pi * 3 * t)) + 0.02 * rng.standard_normal(32000)) * 32767).astype(np.int16)
+        e = voice.embed_segments(pcm, [(0.0, 2.0)])
+        if e.shape[1] < 128 or abs(float(np.linalg.norm(e[0])) - 1) > 1e-3:
+            raise RuntimeError(f"bad voiceprint {e.shape}")
+        fonts = _fonts_dir()
+        if not any(fonts.glob("*.ttf")):
+            raise RuntimeError("caption font missing from assets/fonts")
+        ass = build_ass([{"w": " Hello", "s": 0.1, "e": 0.6}, {"w": " world!", "s": 0.6, "e": 1.2}], 0, 2, 540, 960, True, "Test", "crop")
+        d = fonts.parent
+        (d / "selftest.ass").write_text(ass, "utf-8")
+        out = Path(tempfile.gettempdir()) / "lk_selftest_caption.png"
+        r = subprocess.run([ffmpeg_bin(), "-hide_banner", "-y", "-f", "lavfi", "-i", "color=c=black:s=540x960:d=1",
+                            "-vf", "subtitles=selftest.ass:fontsdir=fonts", "-frames:v", "1", "-update", "1", str(out)],
+                           capture_output=True, text=True, cwd=str(d), **popen_kwargs())
+        if r.returncode != 0:
+            raise RuntimeError("caption render failed: " + r.stderr[-400:])
+        from PIL import Image
+        lit = np.asarray(Image.open(out).convert("L")).mean()
+        if lit < 0.5:
+            raise RuntimeError("captions rendered nothing (font not found by libass?)")
+        import yt_dlp
+        return f"voiceprint dim {e.shape[1]}, captions rendered (mean luma {lit:.1f}), yt-dlp {yt_dlp.version.__version__}"
 
     def _engine_chat():
         """Optional: LK_TEST_CHAT_MODEL / LK_TEST_MMPROJ point at a tiny VLM fetched only in CI."""
@@ -217,7 +251,7 @@ def selftest(out_path: str) -> int:
         return f"status {r.status_code}, ffmpeg={r.json()['ffmpeg']}"
 
     for name, fn in (("imports", _imports), ("ffmpeg", _ffmpeg), ("whisper", _whisper), ("server", _server),
-                     ("engine_embed", _engine_embed), ("engine_chat", _engine_chat)):
+                     ("engine_embed", _engine_embed), ("voice_captions", _voice_and_captions), ("engine_chat", _engine_chat)):
         check(name, fn)
     _shutdown_engine()
     report["result"] = "PASS" if ok else "FAIL"

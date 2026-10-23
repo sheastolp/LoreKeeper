@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 
 APP_NAME = "Lorekeeper"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 IS_WINDOWS = os.name == "nt"
 FROZEN = getattr(sys, "frozen", False)
 

@@ -14,7 +14,8 @@ from urllib.parse import unquote
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from . import ai, engine, models, ollama, qa
+from . import ai, engine, models, ollama, qa, twitch, voice
+from . import clips as clips_mod
 from . import search as search_mod
 from .config import (APP_VERSION, DERIVED_DIR, IS_WINDOWS, ffmpeg_bin, get_settings, resource_root,
                      update_settings)
@@ -514,6 +515,164 @@ def reveal(body: dict = Body(...)):
     except Exception as exc:
         raise HTTPException(500, str(exc))
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ people (voiceprints) & clips
+
+def _vf(fn):
+    try:
+        return fn()
+    except (voice.VoiceError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/people")
+def list_people():
+    return voice.people()
+
+
+@app.post("/api/people")
+def add_person(body: dict = Body(...)):
+    """From transcript stretches: {name, samples:[{source_id,start,end}]} — runs as a job (may need to analyse audio)."""
+    name, samples = (body.get("name") or "").strip(), body.get("samples") or []
+    if not name or not samples:
+        raise HTTPException(400, "Give them a name and pick some of their lines")
+    return jobs.submit("person", f"Learn {name}'s voice", lambda j: voice.create_person(name, samples, job=j)).to_dict()
+
+
+@app.post("/api/people/from-voice")
+def person_from_voice(body: dict = Body(...)):
+    return _vf(lambda: voice.person_from_cluster(body["source_id"], body.get("windows") or [], body.get("name") or "Someone"))
+
+
+@app.post("/api/people/{pid}/teach")
+def teach_person(pid: str, body: dict = Body(...)):
+    """Add more examples: {source_id, windows} from a discovered voice, or {samples:[…]}."""
+    def work(j):
+        if body.get("windows") is not None:
+            idx = voice.ensure_index(body["source_id"], j)
+            import numpy as np
+            sel = np.array([w for w in body["windows"] if 0 <= w < len(idx["embs"])], dtype=int)
+            return voice.add_samples(pid, None, idx["embs"][sel])
+        return voice.add_samples(pid, body.get("samples") or [])
+    return jobs.submit("person", "Teach voiceprint", work).to_dict()
+
+
+@app.patch("/api/people/{pid}")
+def edit_person(pid: str, body: dict = Body(...)):
+    return _vf(lambda: voice.update_person(pid, body.get("name"), body.get("sensitivity")))
+
+
+@app.delete("/api/people/{pid}")
+def remove_person(pid: str):
+    voice.delete_person(pid)
+    return {"ok": True}
+
+
+@app.post("/api/voices/discover")
+def discover_voices(body: dict = Body(...)):
+    sid = body.get("source_id")
+    if not db.source(sid):
+        raise HTTPException(404)
+    return jobs.submit("voices", "Find voices", lambda j: voice.discover(sid, j)).to_dict()
+
+
+@app.get("/api/people/{pid}/presence")
+def person_presence(pid: str, source_id: str, bins: int = 400):
+    """Downsampled match curve for the VOD timeline strip."""
+    import numpy as np
+    p = _vf(lambda: voice.load_person(pid))
+    idx = voice.load_index(source_id)
+    if not idx:
+        return {"ready": False}
+    pr = voice.presence(p, idx)
+    src = db.source(source_id)
+    dur = float(src.get("duration") or (idx["ends"].max() if len(idx["ends"]) else 1))
+    curve = np.zeros(bins, dtype=np.float32)
+    mid = (idx["starts"] + idx["ends"]) / 2
+    if len(mid):
+        b = np.clip((mid / dur * bins).astype(int), 0, bins - 1)
+        np.maximum.at(curve, b, pr["sim"])
+    return {"ready": True, "duration": dur, "threshold": pr["threshold"], "curve": curve.round(3).tolist(),
+            "segments": pr["segments"], "seconds": round(sum(b - a for a, b in pr["segments"]), 1)}
+
+
+@app.post("/api/clips/find")
+def find_clips(body: dict = Body(...)):
+    pid, sids = body.get("person_id"), body.get("source_ids") or []
+    if not pid or not sids:
+        raise HTTPException(400, "Pick a person and at least one VOD")
+    p = _vf(lambda: voice.person(pid))
+    return jobs.submit("clips", f"Find {p['name']}'s best moments", lambda j: clips_mod.find(
+        j, pid, sids, length=body.get("length", "medium"), per_vod=int(body.get("per_vod", 6)),
+        sensitivity=body.get("sensitivity"), use_ai=bool(body.get("use_ai", True))), lane="clips").to_dict()
+
+
+@app.get("/api/clips")
+def get_clips(run_id: str | None = None, person_id: str | None = None, status: str | None = None):
+    return clips_mod.list_clips(run_id, person_id, status)
+
+
+@app.get("/api/clips/runs")
+def clip_runs():
+    return clips_mod.runs()
+
+
+@app.patch("/api/clips/{cid}")
+def edit_clip(cid: str, body: dict = Body(...)):
+    try:
+        return clips_mod.update(cid, **body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/clipthumb/{cid}")
+def clip_thumb(cid: str):
+    try:
+        c = clips_mod.get_clip(cid)
+    except ValueError:
+        raise HTTPException(404)
+    d = derived(c["source_id"]) / "clips"
+    d.mkdir(exist_ok=True)
+    p = d / f"{cid}_{int(c['start'] * 10)}.jpg"
+    if not p.exists():
+        from .ingest.media import grab_frame
+        src = db.source(c["source_id"])
+        data = grab_frame(src["path"], (c["start"] + c["end"]) / 2, width=480)
+        if not data:
+            raise HTTPException(404)
+        p.write_bytes(data)
+    return _file(p)
+
+
+# ------------------------------------------------------------------ twitch
+
+@app.post("/api/twitch/vods")
+def twitch_vods(body: dict = Body(...)):
+    text = (body.get("channel") or "").strip()
+    if twitch.parse_vod(text):
+        return {"single": True, "vods": [{"id": twitch.parse_vod(text), "url": f"https://www.twitch.tv/videos/{twitch.parse_vod(text)}",
+                                          "title": "VOD " + twitch.parse_vod(text), "duration": None}]}
+    try:
+        return {"single": False, "vods": twitch.list_vods(text, limit=int(body.get("limit", 20)))}
+    except twitch.TwitchError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/twitch/download")
+def twitch_download(body: dict = Body(...)):
+    items = body.get("vods") or []
+    if not items:
+        raise HTTPException(400, "Pick at least one VOD")
+    out = []
+    for v in items:
+        def work(j, v=v):
+            path = twitch.download(j, v.get("url") or v["id"], quality=str(body.get("quality", "720")),
+                                   start=v.get("start"), end=v.get("end"))
+            sid = pipeline.add_path(path, owned=True)
+            return {"path": path, "source_id": sid}
+        out.append(jobs.submit("twitch", f"Twitch: {v.get('title') or v.get('id')}", work, lane="download").to_dict())
+    return out
 
 
 # ------------------------------------------------------------------ timeline projects
