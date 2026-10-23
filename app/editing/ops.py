@@ -15,6 +15,7 @@ from .. import ff
 from ..config import TMP_DIR, ffmpeg_bin, get_settings
 from ..db import db
 from ..jobs import Job
+from . import watermark
 
 VIDEO_CONTAINERS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 AUDIO_CODEC_FOR_EXT = {
@@ -36,12 +37,17 @@ class Ctx:
         self.commands: list[str] = []
         self.outputs: list[str] = []
         self.explain = ""
+        self.watermark: dict | None = None   # set by watermark.vf() when a render carries the corner tag
 
     def ffmpeg(self, args: list[str], duration: float | None = None, label: str = "",
                p0: float = 0.0, p1: float = 1.0, cwd: str | None = None) -> None:
         self.commands.append(ff.pretty_cmd([ffmpeg_bin(), *args]))
         if not self.dry:
-            ff.run(args, job=self.job, duration=duration, p0=p0, p1=p1, label=label, cwd=cwd)
+            # run from tmp/ so filters can name fonts, caption and text files by short relative paths
+            ff.run(args, job=self.job, duration=duration, p0=p0, p1=p1, label=label, cwd=cwd or str(TMP_DIR))
+
+    def full_explain(self) -> str:
+        return (self.explain + (" " + watermark.note(self.watermark) if self.watermark else "")).strip()
 
     def update(self, p: float, msg: str) -> None:
         if self.job and not self.dry:
@@ -69,7 +75,7 @@ def _info(s: dict) -> dict:
 
 
 def export_path(stem: str, label: str, ext: str) -> str:
-    out_dir = Path(get_settings()["export_dir"])
+    out_dir = Path(get_settings()["export_dir"]).expanduser().absolute()
     out_dir.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", stem).strip() or "export"
     base = out_dir / f"{safe} - {label} {time.strftime('%H%M%S')}{ext}"
@@ -100,6 +106,45 @@ def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+def _wm_args(ctx: Ctx, info: dict, ext: str) -> list[str]:
+    """-vf with the corner watermark when this output carries video, else nothing."""
+    if not (info.get("has_video") and ext in VIDEO_CONTAINERS):
+        return []
+    wm = watermark.vf(ctx)
+    return ["-vf", wm] if wm else []
+
+
+def _chain(ctx: Ctx) -> str:
+    """',drawtext=…' to append to a filter chain, or '' when the watermark is off."""
+    wm = watermark.vf(ctx)
+    return f",{wm}" if wm else ""
+
+
+def _stream_copy_blocked(info: dict) -> bool:
+    """Copied video packets can't be drawn on, so instant (stream copy) modes re-encode while the watermark is on."""
+    return bool(info.get("has_video")) and watermark.active()
+
+
+def _keep_video(ctx: Ctx, info: dict, ext: str) -> tuple[list[str], bool]:
+    """Video stream for audio-only edits: copied untouched, or re-encoded once to carry the watermark."""
+    if not info.get("has_video"):
+        return [], False
+    wm = watermark.vf(ctx)
+    if not wm:
+        return ["-map", "0:v:0", "-c:v", "copy"], False
+    if ext == ".webm":
+        vcod = ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-row-mt", "1", "-deadline", "good",
+                "-cpu-used", "4", "-pix_fmt", "yuv420p"]
+    else:
+        vcod = H264 + (["-movflags", "+faststart"] if ext in (".mp4", ".mov", ".m4v") else [])
+    return ["-map", "0:v:0", "-vf", wm, *vcod], True
+
+
+def _video_note(reencoded: bool) -> str:
+    return ("Video is re-encoded once at high quality (visually lossless) so it can carry the corner watermark."
+            if reencoded else "Video is stream-copied untouched.")
+
+
 # ------------------------------------------------------------------ basic cuts
 
 def trim(ctx: Ctx, p: dict) -> None:
@@ -110,11 +155,15 @@ def trim(ctx: Ctx, p: dict) -> None:
     b = _clamp(float(p.get("end", dur)), a + 0.05, dur) if dur else float(p.get("end", 0))
     ext = _same_ext(s, info)
     out = export_path(s["title"], "trim", ext)
-    if p.get("precise", True):
+    forced = not p.get("precise", True) and _stream_copy_blocked(info)
+    if p.get("precise", True) or forced:
         ctx.explain = ("Precise mode re-encodes, so the cut lands on the exact frame you picked. "
                        "Input seeking (-ss before -i) jumps to the nearest keyframe, then decodes forward to your in-point.")
+        if forced:
+            ctx.explain = ("Instant mode copies the video packets untouched, and copied packets can't have anything drawn "
+                           "on them, so with the watermark on this re-encodes instead (and the cut is frame-accurate as a bonus).")
         ctx.ffmpeg(["-ss", f"{a:.3f}", "-i", s["path"], "-t", f"{b - a:.3f}", "-map", "0:v:0?", "-map", "0:a:0?",
-                    *_codecs(info, ext), out], duration=b - a, label="Trimming")
+                    *_wm_args(ctx, info, ext), *_codecs(info, ext), out], duration=b - a, label="Trimming")
     else:
         ctx.explain = ("Fast mode stream-copies: no re-encode, no quality loss, done in seconds. Catch: compressed video "
                        "can only start on a keyframe (the start of a GOP), so the in-point may snap up to a few seconds early.")
@@ -129,10 +178,13 @@ def split(ctx: Ctx, p: dict) -> None:
     dur = info.get("duration") or 0
     at = _clamp(float(p["at"]), 0.05, max(0.05, dur - 0.05))
     ext = _same_ext(s, info)
-    codecs = _codecs(info, ext) if p.get("precise", True) else ["-c", "copy", "-avoid_negative_ts", "make_zero"]
+    precise = p.get("precise", True) or _stream_copy_blocked(info)
+    codecs = [*_wm_args(ctx, info, ext), *_codecs(info, ext)] if precise else ["-c", "copy", "-avoid_negative_ts", "make_zero"]
     o1, o2 = export_path(s["title"], "part 1", ext), export_path(s["title"], "part 2", ext)
     maps = ["-map", "0:v:0?", "-map", "0:a:0?"]
     ctx.explain = "Two passes over the same file: [0 → split] and [split → end]. Same keyframe rules as Trim apply in fast mode."
+    if precise and not p.get("precise", True):
+        ctx.explain += " Instant mode can't draw the watermark on copied packets, so both parts are re-encoded."
     ctx.ffmpeg(["-i", s["path"], "-t", f"{at:.3f}", *maps, *codecs, o1], duration=at, label="Part 1", p1=0.5)
     ctx.ffmpeg(["-ss", f"{at:.3f}", "-i", s["path"], *maps, *codecs, o2], duration=dur - at, label="Part 2", p0=0.5)
     ctx.outputs += [o1, o2]
@@ -164,7 +216,12 @@ def merge(ctx: Ctx, p: dict) -> None:
                 graph.append(f"color=c=black:s={W}x{H}:r={F}:d={d:.3f},format=yuv420p[v{n}]")
             graph.append(_audio_pad(n, info, d))
             pads.append(f"[v{n}][a{n}]")
-        graph.append(f"{''.join(pads)}concat=n={len(srcs)}:v=1:a=1[v][a]")
+        wm = watermark.vf(ctx)
+        if wm:
+            graph.append(f"{''.join(pads)}concat=n={len(srcs)}:v=1:a=1[vcat][a]")
+            graph.append(f"[vcat]{wm}[v]")
+        else:
+            graph.append(f"{''.join(pads)}concat=n={len(srcs)}:v=1:a=1[v][a]")
         ext = ".mp4"
         out = export_path(srcs[0]["title"], "merged", ext)
         ctx.ffmpeg([*args, "-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
@@ -212,7 +269,7 @@ def speed(ctx: Ctx, p: dict) -> None:
     args = ["-i", s["path"]]
     fl = []
     if info.get("has_video"):
-        fl.append(f"[0:v:0]setpts=PTS/{f:.4f}[v]")
+        fl.append(f"[0:v:0]setpts=PTS/{f:.4f}{_chain(ctx) if ext in VIDEO_CONTAINERS else ''}[v]")
     if info.get("has_audio"):
         fl.append(f"[0:a:0]{_atempo_chain(f)}[a]")
     args += ["-filter_complex", ";".join(fl)]
@@ -232,11 +289,11 @@ def volume(ctx: Ctx, p: dict) -> None:
     db_gain = _clamp(float(p.get("gain_db", 3)), -40, 30)
     ext = _same_ext(s, info)
     out = export_path(s["title"], f"vol {db_gain:+g}dB", ext)
-    vcopy = ["-map", "0:v:0?", "-c:v", "copy"] if info.get("has_video") else []
+    vcopy, reenc = _keep_video(ctx, info, ext)
     acodec = AUDIO_CODEC_FOR_EXT.get(ext, AAC) if not info.get("has_video") else (
         ["-c:a", "libopus", "-b:a", "160k"] if ext == ".webm" else AAC)
     ctx.explain = (f"{db_gain:+g} dB multiplies the waveform by {10 ** (db_gain / 20):.2f}×. Decibels are logarithmic: "
-                   "+6 dB ≈ double the amplitude, +10 dB ≈ 'twice as loud' to human ears. Video is stream-copied untouched.")
+                   f"+6 dB ≈ double the amplitude, +10 dB ≈ 'twice as loud' to human ears. {_video_note(reenc)}")
     ctx.ffmpeg(["-i", s["path"], *vcopy, "-map", "0:a:0", "-af", f"volume={db_gain}dB,alimiter=limit=0.97",
                 *acodec, out], duration=info.get("duration"), label="Adjusting volume")
     ctx.outputs.append(out)
@@ -279,13 +336,17 @@ def convert(ctx: Ctx, p: dict) -> None:
                        "(palettegen) and then maps frames onto it with ordered dithering (paletteuse). "
                        "That's the difference between a crisp GIF and a banded mess.")
         ctx.ffmpeg(["-i", s["path"], "-t", "60", "-filter_complex",
-                    f"[0:v:0]fps=15,scale=-2:{h}:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[pal];"
+                    f"[0:v:0]fps=15,scale=-2:{h}:flags=lanczos{_chain(ctx)},split[s0][s1];[s0]palettegen=stats_mode=diff[pal];"
                     f"[s1][pal]paletteuse=dither=bayer:bayer_scale=4", "-loop", "0", out],
                    duration=min(dur or 60, 60), label="Building GIF")
     else:
-        vf = []
+        chain = []
         if height and info.get("height") and height < int(info["height"]):
-            vf = ["-vf", f"scale=-2:{height}:flags=lanczos"]
+            chain.append(f"scale=-2:{height}:flags=lanczos")
+        wm = watermark.vf(ctx)
+        if wm:
+            chain.append(wm)
+        vf = ["-vf", ",".join(chain)] if chain else []
         if fmt == "webm":
             vcod = ["-c:v", "libvpx-vp9", "-crf", str(crf + 10), "-b:v", "0", "-row-mt", "1",
                     "-deadline", "good", "-cpu-used", "4", "-pix_fmt", "yuv420p"]
@@ -328,11 +389,13 @@ def denoise(ctx: Ctx, p: dict) -> None:
     chain = DENOISE.get(level, DENOISE["medium"])
     ext = _same_ext(s, info)
     out = export_path(s["title"], f"denoised {level}", ext)
-    vcopy = ["-map", "0:v:0?", "-c:v", "copy"] if info.get("has_video") else []
-    acod = AAC if info.get("has_video") else AUDIO_CODEC_FOR_EXT.get(ext, AAC)
+    vcopy, reenc = _keep_video(ctx, info, ext)
+    acod = (["-c:a", "libopus", "-b:a", "160k"] if ext == ".webm" else AAC) if info.get("has_video") \
+        else AUDIO_CODEC_FOR_EXT.get(ext, AAC)
     ctx.explain = ("High-pass strips rumble (desk bumps, fans, AC hum harmonics). afftdn is an FFT denoiser: "
                    "it learns the noise floor's spectrum and subtracts it per frequency bin, with tn=1 tracking "
-                   "the floor as it drifts. Push 'strong' too far and voices go watery — that's spectral subtraction artefacts.")
+                   "the floor as it drifts. Push 'strong' too far and voices go watery — that's spectral subtraction artefacts. "
+                   + _video_note(reenc) * bool(info.get("has_video")))
     ctx.ffmpeg(["-i", s["path"], *vcopy, "-map", "0:a:0", "-af", chain, *acod, out],
                duration=info.get("duration"), label="Denoising")
     ctx.outputs.append(out)
@@ -363,9 +426,10 @@ def normalize(ctx: Ctx, p: dict) -> None:
             ctx.job.write(f"measured: {m['input_i']} LUFS integrated, {m['input_tp']} dBTP peak, LRA {m['input_lra']}")
     af = (f"loudnorm=I={I}:TP={TP}:LRA={LRA}:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
           f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
-    vcopy = ["-map", "0:v:0?", "-c:v", "copy"] if info.get("has_video") else []
-    acod = AAC if info.get("has_video") else AUDIO_CODEC_FOR_EXT.get(ext, AAC)
-    ctx.explain = (f"Two-pass EBU R128. Pass 1 measures integrated loudness (LUFS — loudness weighted by how human hearing "
+    vcopy, reenc = _keep_video(ctx, info, ext)
+    acod = (["-c:a", "libopus", "-b:a", "160k"] if ext == ".webm" else AAC) if info.get("has_video") \
+        else AUDIO_CODEC_FOR_EXT.get(ext, AAC)
+    ctx.explain = (f"{_video_note(reenc) + ' ' if info.get('has_video') else ''}Two-pass EBU R128. Pass 1 measures integrated loudness (LUFS — loudness weighted by how human hearing "
                    f"works, gated so silence doesn't drag the average down). Pass 2 applies one linear gain to hit {I:g} LUFS "
                    f"with true peaks under {TP} dBTP. 'Linear' matters: a single static gain keeps your dynamics, instead of "
                    f"a compressor pumping. Targets: YouTube/Twitch ≈ -14, podcasts -16, broadcast TV -23.")
@@ -421,7 +485,7 @@ def render_segments(ctx: Ctx, s: dict, info: dict, keeps: list[tuple[float, floa
     kept = sum(b - a for a, b in snapped)
     fl = []
     if has_v:
-        fl.append(f"[0:v:0]fps={G},select='{expr}',setpts=N/{G}/TB[v]")
+        fl.append(f"[0:v:0]fps={G},select='{expr}',setpts=N/{G}/TB{_chain(ctx) if ext in VIDEO_CONTAINERS else ''}[v]")
     if has_a:
         fl.append(f"[0:a:0]aresample=48000,asetnsamples=n={nsamp}:p=0,aselect='{expr}',asetpts=N/SR/TB[a]")
     graph = ";".join(fl)

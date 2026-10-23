@@ -212,6 +212,22 @@ def selftest(out_path: str) -> int:
         import yt_dlp
         return f"voiceprint dim {e.shape[1]}, captions rendered (mean luma {lit:.1f}), yt-dlp {yt_dlp.version.__version__}"
 
+    def _watermark():
+        """drawtext (needs FFmpeg's libfreetype) draws the corner tag with the bundled font, where it should be."""
+        import io
+        import numpy as np
+        from PIL import Image
+        from .editing import watermark
+        on = np.asarray(Image.open(io.BytesIO(watermark.preview("landscape", {"watermark_text": "tavernworks.dev",
+                        "watermark_corner": "bottom-right", "watermark_size": "small"}))).convert("L")).astype(float)
+        off = np.asarray(Image.open(io.BytesIO(watermark.preview("landscape", {"watermark_text": ""}))).convert("L")).astype(float)
+        diff = np.abs(on - off)
+        h, w = diff.shape
+        corner, rest = diff[int(h * 0.85):, int(w * 0.7):].mean(), diff[: int(h * 0.7), : int(w * 0.6)].mean()
+        if corner < 1.0 or rest > 0.5:
+            raise RuntimeError(f"watermark not where expected (corner diff {corner:.2f}, elsewhere {rest:.2f})")
+        return f"drawn bottom-right (corner diff {corner:.1f}, elsewhere {rest:.2f})"
+
     def _engine_chat():
         """Optional: LK_TEST_CHAT_MODEL / LK_TEST_MMPROJ point at a tiny VLM fetched only in CI."""
         model, proj = os.environ.get("LK_TEST_CHAT_MODEL"), os.environ.get("LK_TEST_MMPROJ")
@@ -251,7 +267,8 @@ def selftest(out_path: str) -> int:
         return f"status {r.status_code}, ffmpeg={r.json()['ffmpeg']}"
 
     for name, fn in (("imports", _imports), ("ffmpeg", _ffmpeg), ("whisper", _whisper), ("server", _server),
-                     ("engine_embed", _engine_embed), ("voice_captions", _voice_and_captions), ("engine_chat", _engine_chat)):
+                     ("engine_embed", _engine_embed), ("voice_captions", _voice_and_captions), ("watermark", _watermark),
+                     ("engine_chat", _engine_chat)):
         check(name, fn)
     _shutdown_engine()
     report["result"] = "PASS" if ok else "FAIL"

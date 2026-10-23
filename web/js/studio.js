@@ -16,13 +16,18 @@ let findText = "";
 
 const FILLERS = new Set(["um", "uh", "erm", "er", "ah", "hmm", "mm", "mhm", "uhh", "umm", "eh"]);
 
+// copied (stream-copy) video can't be drawn on, so instant cuts aren't offered while the watermark is on
+const wmBlocksCopy = () => !!(state.status?.settings?.watermark && state.status?.settings?.watermark_text && src?.meta?.has_video);
+const MODE = { k: "precise", label: "Mode", type: "seg", def: true, options: [[true, "Frame-accurate"], [false, "Instant (stream copy)"]], when: () => !wmBlocksCopy() };
+const WM_NOTE = "Cuts are frame-accurate re-encodes while the watermark is on: instant (stream copy) cuts can't have the tag drawn on them. Turn the watermark off in Settings for instant cuts.";
+
 const TOOLS = [
   { group: "Cut", id: "trim", icon: "in", name: "Trim", lede: "Keep only the stretch between your in and out points (I and O keys).",
-    params: [{ k: "precise", label: "Mode", type: "seg", def: true, options: [[true, "Frame-accurate"], [false, "Instant (stream copy)"]] }],
-    build: (p) => ({ source_id: src.id, start: inPt, end: outPt, precise: p.precise }) },
+    params: [MODE],
+    build: (p) => ({ source_id: src.id, start: inPt, end: outPt, precise: wmBlocksCopy() || p.precise }) },
   { id: "split", icon: "split", name: "Split", lede: "Cut the file into two files at the playhead.",
-    params: [{ k: "precise", label: "Mode", type: "seg", def: true, options: [[true, "Frame-accurate"], [false, "Instant (stream copy)"]] }],
-    build: (p) => ({ source_id: src.id, at: video.currentTime, precise: p.precise }) },
+    params: [MODE],
+    build: (p) => ({ source_id: src.id, at: video.currentTime, precise: wmBlocksCopy() || p.precise }) },
   { id: "speed", icon: "speed", name: "Speed", lede: "Speed up or slow down. Voices keep their natural pitch.",
     params: [{ k: "factor", label: "Speed", type: "select", def: 1.5, options: [[0.5, "0.5×"], [0.75, "0.75×"], [1.25, "1.25×"], [1.5, "1.5×"], [2, "2×"], [3, "3×"], [4, "4×"]] }],
     build: (p) => ({ source_id: src.id, factor: p.factor }) },
@@ -265,6 +270,7 @@ function toolPanel() {
   let context = null;
   if (t.id === "trim") context = h("p.muted", `Keeping ${fmtTime(inPt, true)} to ${fmtTime(outPt, true)}, ${(outPt - inPt).toFixed(2)} s. Set the range with the In and Out buttons or the I and O keys.`);
   if (t.id === "split") context = h("p.muted", "Move the playhead to where the cut should go, then render.");
+  if ((t.id === "trim" || t.id === "split") && wmBlocksCopy()) context = [context, h("p.muted", WM_NOTE)];
   if (t.id === "merge") context = mergeUI();
 
   const hood = h("details.hood", { open: true }, h("summary", icon("chev"), "Under the hood"),

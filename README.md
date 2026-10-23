@@ -58,6 +58,15 @@ How it picks highlights: clip-length windows where the person does at least a fi
 
 Clips are saved in the exports folder as `<Person> - <Title> - vertical|16x9 <time>.mp4`.
 
+## Watermark
+
+Every finished video gets a small `tavernworks.dev` tag in one corner so viewers know where to find you. It's a signpost, not copy protection, so it stays small (about 2.6% of the frame's short side: 28 px on 1080p) with a soft shadow that keeps it readable on bright or dark footage.
+
+- **Where:** Settings → Watermark sets the text, the corner (default bottom-right) and the size (tiny / small / medium), with live previews of a 16:9 render and a vertical clip. Click a preview to see it bigger.
+- **Vertical clips** always put it in the top band on the chosen side, because the bottom fifth of a TikTok / Shorts / Reels video is covered by captions and buttons.
+- **What gets it:** clip exports, trims, splits, merges, speed changes, volume / denoise / loudness fixes, dead-air and transcript cuts, conversions (including GIFs) and timeline renders. Audio-only exports never do.
+- **Trade-off:** a watermark can only be drawn on decoded frames, so while it's on, edits that used to copy the video untouched (Instant trim/split, volume, denoise, normalize) re-encode it once at high quality. Switch the watermark off for instant stream-copy cuts.
+
 ## Running from source
 
 ```
@@ -97,7 +106,7 @@ Editing is FFmpeg all the way down. Transcript and dead-air cuts use `select`/`a
 ```
 app/            Python backend (FastAPI on 127.0.0.1, token-locked)
   ingest/       extraction, Whisper, keyframes, chunking, pipeline
-  editing/      FFmpeg recipes, transcript cuts, captions, timeline renderer
+  editing/      FFmpeg recipes, transcript cuts, captions, corner watermark, timeline renderer
   engine.py     llama-server process manager    models.py  catalog, downloads, GGUF imports
   voice.py      voiceprints, voice discovery    clips.py   highlight finder    twitch.py  VOD import
   ai.py         one front door: built-in engine or Ollama      gguf.py  GGUF header reader

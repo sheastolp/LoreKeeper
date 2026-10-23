@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 
 APP_NAME = "Lorekeeper"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 IS_WINDOWS = os.name == "nt"
 FROZEN = getattr(sys, "frozen", False)
 
@@ -36,6 +36,7 @@ def data_dir() -> Path:
         base = Path(os.environ["LOCALAPPDATA"]) / APP_NAME
     else:
         base = Path.home() / ".lorekeeper"
+    base = base.expanduser().absolute()   # FFmpeg runs from tmp/, so every path handed to it must be absolute
     for sub in ("library", "derived", "models", "logs", "tmp"):
         (base / sub).mkdir(parents=True, exist_ok=True)
     return base
@@ -79,6 +80,11 @@ DEFAULTS = {
     "caption_frames": True,
     "ocr_scanned_pdfs": True,
     "export_dir": default_export_dir(),
+    # small "where to find us" tag in a corner of every finished video (not copy protection)
+    "watermark": True,
+    "watermark_text": "tavernworks.dev",
+    "watermark_corner": "bottom-right",  # top-left / top-right / bottom-left / bottom-right
+    "watermark_size": "small",           # tiny / small / medium
 }
 
 _lock = threading.Lock()

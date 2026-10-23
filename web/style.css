@@ -399,7 +399,7 @@ input[type="checkbox"] { accent-color: var(--verdigris); width: 15px; height: 15
 .modal .card { background: var(--ink-2); border: 1px solid var(--rule); border-radius: var(--r-lg); padding: 14px; max-width: min(1100px, 92vw); width: 100%; }
 .modal .card header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .modal .card header b { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.modal video, .modal img { width: 100%; max-height: 72vh; background: #000; border-radius: 8px; display: block; }
+.modal video, .modal img { width: 100%; max-height: 72vh; background: #000; border-radius: 8px; display: block; object-fit: contain; }
 .modal audio { width: 100%; }
 
 .toasts { position: fixed; bottom: 18px; left: calc(var(--rail) + 18px); z-index: 70; display: flex; flex-direction: column; gap: 8px; }
@@ -492,6 +492,31 @@ input[type="checkbox"] { accent-color: var(--verdigris); width: 15px; height: 15
 .set-fields .input { width: 100%; }
 .check { display: flex; gap: 9px; align-items: flex-start; font-size: var(--s3); cursor: pointer; }
 .check small { display: block; color: var(--vellum-dim); font-size: var(--s1); }
+.seg button:disabled { opacity: .45; cursor: default; }
+
+/* watermark: a tiny 16:9 frame you click a corner of, plus real rendered previews */
+.corner-row { display: flex; align-items: center; gap: 12px; font-size: var(--s2); }
+.corner-pick { position: relative; width: 78px; height: 44px; flex: none; border: 1px solid var(--rule); border-radius: var(--r-sm); background: var(--ink); }
+.corner-pick button { position: absolute; width: 30px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: none;
+  cursor: pointer; display: grid; place-items: center; }
+.corner-pick button i { width: 16px; height: 4px; border-radius: 2px; background: var(--ink-4); transition: background .12s; }
+.corner-pick button:hover i { background: var(--vellum-dim); }
+.corner-pick button[aria-checked="true"] i { background: var(--gilt); }
+.corner-pick button:focus-visible { outline: 2px solid var(--verdigris); outline-offset: 0; }
+.corner-pick button:disabled { cursor: default; opacity: .45; }
+.corner-pick .top-left { top: 1px; left: 1px; }
+.corner-pick .top-right { top: 1px; right: 1px; }
+.corner-pick .bottom-left { bottom: 1px; left: 1px; }
+.corner-pick .bottom-right { bottom: 1px; right: 1px; }
+.wm-previews { display: flex; gap: 16px; align-items: flex-start; }
+.wm-fig { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wm-fig img { display: block; align-self: flex-start; cursor: zoom-in; border-radius: var(--r-md); border: 1px solid var(--rule); background: var(--ink-3); }
+.wm-fig.landscape { flex: 1 1 auto; }
+.wm-fig.landscape img { width: 100%; aspect-ratio: 16 / 9; }
+.wm-fig.vertical { flex: none; width: 140px; }
+.wm-fig.vertical img { width: 126px; aspect-ratio: 9 / 16; }
+.wm-fig figcaption { font-size: var(--s1); color: var(--vellum-dim); line-height: 1.4; }
+
 .modelrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule-soft); font-size: var(--s2); }
 .modelrow:last-child { border-bottom: 0; }
 .modelrow .nm { flex: 1; }
@@ -621,6 +646,10 @@ canvas.strip { width: 100%; height: 14px; margin-top: 3px; display: block; }
 .cl-why p { flex-basis: 100%; margin: 4px 0 0; color: var(--vellum-2); font-size: var(--s2); }
 .cl-export { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
 .ex-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wm-line { margin: 0; font-size: var(--s1); color: var(--vellum-dim); }
+.linkish { border: 0; background: none; padding: 0; font: inherit; color: var(--verdigris); cursor: pointer; text-decoration: underline;
+  text-underline-offset: 2px; }
+.linkish:hover { color: var(--vellum); }
 .ex-row .seg button { display: inline-flex; gap: 6px; align-items: center; }
 .ex-row .seg svg { width: 14px; height: 14px; }
 .cl-exports { display: flex; flex-direction: column; gap: 6px; }

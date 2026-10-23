@@ -163,9 +163,9 @@ export async function reveal(path) {
 }
 
 // ---------------------------------------------------------------- media modal
-export function openPlayer(src, title) {
-  const isAudio = /\.(mp3|wav|m4a|flac|ogg|opus|aac)$/i.test(title);
-  const isImg = /\.(gif|png|jpe?g|webp)$/i.test(title);
+export function openPlayer(src, title, kind) {
+  const isAudio = !kind && /\.(mp3|wav|m4a|flac|ogg|opus|aac)$/i.test(title);
+  const isImg = kind === "image" || /\.(gif|png|jpe?g|webp)$/i.test(title);
   const media = isImg ? h("img", { src }) : h(isAudio ? "audio" : "video", { src, controls: true, autoplay: true });
   const close = () => { if (media.pause) media.pause(); m.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = (e) => e.key === "Escape" && close();

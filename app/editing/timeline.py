@@ -15,6 +15,7 @@ from pathlib import Path
 from .. import ff
 from ..config import TMP_DIR
 from ..db import db
+from . import watermark
 from .ops import AAC, AUDIO_CODEC_FOR_EXT, Ctx, export_path
 
 PIP_POS = {
@@ -163,6 +164,12 @@ def render_project(ctx: Ctx, p: dict) -> None:
             add_audio(n_in, c, start, dur, f"aa{k}")
             n_in += 1
             k += 1
+
+    # corner watermark goes on last, over every layer (expressions size it to the canvas, so draft renders match)
+    wm = watermark.vf(ctx) if has_visual else None
+    if wm:
+        graph.append(f"[{last}]{wm}[wm]")
+        last = "wm"
 
     graph.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={total:.3f}[sil]")
     audio_pads.append("[sil]")

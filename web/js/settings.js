@@ -1,4 +1,4 @@
-import { bus, clear, desktop, fmtBytes, get, h, icon, post, reveal, state, toast, waitForJob } from "./core.js";
+import { bus, clear, desktop, fmtBytes, get, h, icon, openPlayer, post, reveal, state, toast, waitForJob } from "./core.js";
 import { addOwnModel, openSetup } from "./setup.js";
 
 let root, body;
@@ -188,6 +188,47 @@ function ollamaPanel(ai) {
   ];
 }
 
+// ---------------------------------------------------------------- watermark
+const CORNERS = [["top-left", "Top left"], ["top-right", "Top right"], ["bottom-left", "Bottom left"], ["bottom-right", "Bottom right"]];
+const WM_SIZES = [["tiny", "Tiny"], ["small", "Small"], ["medium", "Medium"]];
+const previews = new Map();   // layout -> <img>, reused while the settings are unchanged (render() runs on every status tick)
+
+async function saveWm(patch) { await save(patch); render(); }
+
+function wmPreview(layout, caption) {
+  const q = new URLSearchParams({ layout, text: s.watermark_text || "", corner: s.watermark_corner, size: s.watermark_size }).toString();
+  let img = previews.get(layout);
+  if (!img || img.dataset.key !== q) {
+    img = h("img", { src: `/api/watermark/preview?${q}`, alt: `Watermark preview, ${caption}`, "data-key": q, loading: "lazy",
+      title: "Click to see it bigger", onclick: () => openPlayer(img.src, `Watermark preview: ${caption}`, "image") });
+    previews.set(layout, img);
+  }
+  return h(`figure.wm-fig.${layout}`, img, h("figcaption", caption));
+}
+
+function watermarkGroup() {
+  const on = !!s.watermark;
+  const corner = h("div.corner-pick", { role: "radiogroup", "aria-label": "Corner" },
+    CORNERS.map(([v, label]) => h(`button.${v}`, { type: "button", role: "radio", title: label, "aria-label": label,
+      "aria-checked": String(s.watermark_corner === v), disabled: !on, onclick: () => saveWm({ watermark_corner: v }) }, h("i"))));
+  const size = h("div.seg", { role: "group", "aria-label": "Size" },
+    WM_SIZES.map(([v, label]) => h("button", { type: "button", "aria-pressed": String(s.watermark_size === v), disabled: !on,
+      onclick: () => saveWm({ watermark_size: v }) }, label)));
+  const where = (CORNERS.find(([v]) => v === s.watermark_corner) || CORNERS[3])[1].toLowerCase();
+  return group("Watermark", "A small tag in one corner of every finished video, so viewers know where to find you. It's a signpost, not copy protection.",
+    h("label.check.full", h("input", { type: "checkbox", checked: on, onchange: (e) => saveWm({ watermark: e.target.checked }) }),
+      h("span", "Add it to finished videos",
+        h("small", "Clips, cuts, merges, timeline renders, conversions and GIFs. Audio-only exports never get one. While it's on, Instant (stream copy) cuts re-encode, because copied video can't be drawn on."))),
+    h("label.field", h("span", "Text"),
+      h("input.input", { value: s.watermark_text, placeholder: "tavernworks.dev", maxlength: 80, spellcheck: false, disabled: !on,
+        onchange: (e) => saveWm({ watermark_text: e.target.value }) })),
+    h("div.field", h("span", "Size"), size),
+    h("div.field", h("span", "Corner"), h("div.corner-row", corner, h("span.muted", `${where[0].toUpperCase()}${where.slice(1)}`))),
+    on && h("div.full.wm-previews",
+      wmPreview("landscape", "16:9 renders"),
+      wmPreview("vertical", "Vertical clips: top band, clear of app buttons")));
+}
+
 // ---------------------------------------------------------------- render
 function render() {
   if (!s) return;
@@ -220,6 +261,8 @@ function render() {
       select("max_keyframes", "Frames described per video", [[0, "None"], [8, "Up to 8"], [16, "Up to 16"], [32, "Up to 32"], [64, "Up to 64"]], true),
       check("caption_frames", "Describe video frames", "Lets you ask about what was on screen, not just what was said."),
       check("ocr_scanned_pdfs", "Read scanned PDFs", "Pages without a text layer are rendered and read by the vision model.")),
+
+    watermarkGroup(),
 
     group("Exports", "Every render and caption file is saved here. Your originals are never changed.",
       h("label.field.full", h("span", "Folder"),

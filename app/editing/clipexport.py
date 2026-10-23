@@ -17,6 +17,7 @@ from pathlib import Path
 
 from ..config import TMP_DIR, resource_root
 from ..db import db
+from . import watermark
 from .ops import AAC, Ctx, _clamp, _info, _src, export_path
 
 FONT_NAME = "Anton"
@@ -178,6 +179,9 @@ def export_clip(ctx: Ctx, p: dict) -> None:
         cwd = str(TMP_DIR)
         explain += ("Captions: libass renders an .ass file built from Whisper's word timestamps, 1–3 words "
                     "at a time with the spoken word lit up; the bundled Anton font is loaded from fontsdir. ")
+    wm = watermark.vf(ctx)
+    if wm:
+        graph += f",{wm}"      # above the captions; on vertical it sits in the top band, clear of the app buttons
     graph += f",fps={fps},format=yuv420p[v]"
     stem = f"{person} - {title}" if person else (title or s["title"])
     out = export_path(stem[:90], "vertical" if vertical else "16x9", ".mp4")

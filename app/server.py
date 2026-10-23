@@ -20,7 +20,7 @@ from . import search as search_mod
 from .config import (APP_VERSION, DERIVED_DIR, IS_WINDOWS, ffmpeg_bin, get_settings, resource_root,
                      update_settings)
 from .db import db
-from .editing import ops, subtitles, timeline
+from .editing import ops, subtitles, timeline, watermark
 from .ingest import pipeline
 from .ingest.media import derived
 from .jobs import jobs
@@ -113,6 +113,23 @@ def set_s(patch: dict = Body(...)):
     if any(before.get(k) != after.get(k) for k in ENGINE_KEYS):
         _rewarm()
     return after
+
+
+@app.get("/api/watermark/preview")
+def watermark_preview(layout: str = "landscape", text: str | None = None, corner: str | None = None,
+                      size: str | None = None):
+    """One frame with the real drawtext applied, over a frame from your own library when there is one."""
+    over = {k: v for k, v in (("watermark_text", text), ("watermark_corner", corner), ("watermark_size", size)) if v is not None}
+    bg = None
+    for s in db.sources():
+        if s["kind"] == "video" and s["status"] == "ready" and (derived(s["id"]) / "thumb.jpg").exists():
+            bg = derived(s["id"]) / "thumb.jpg"
+            break
+    try:
+        jpg = watermark.preview("vertical" if layout == "vertical" else "landscape", over, bg)
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 def _rewarm():
@@ -449,14 +466,14 @@ def edit(op: str, body: dict = Body(...)):
             fn(ctx, params)
         except Exception as exc:
             raise HTTPException(400, str(exc))
-        return {"commands": ctx.commands, "explain": ctx.explain}
+        return {"commands": ctx.commands, "explain": ctx.full_explain()}
     title = body.get("title") or op.replace("_", " ").title()
 
     def work(job):
         ctx = ops.Ctx(job=job)
         fn(ctx, params)
-        job.write(ctx.explain)
-        return {"outputs": ctx.outputs, "commands": ctx.commands, "explain": ctx.explain}
+        job.write(ctx.full_explain())
+        return {"outputs": ctx.outputs, "commands": ctx.commands, "explain": ctx.full_explain()}
 
     return jobs.submit("render", title, work, lane="render").to_dict()
 

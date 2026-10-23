@@ -335,7 +335,12 @@ function renderDetail(autoplay) {
       h("span", "Burn in captions", h("small", "Word-by-word, the spoken word lit up")));
     const ttl = vertical && h("label.check", h("input", { type: "checkbox", checked: ex.show_title, onchange: (e) => { ex.show_title = e.target.checked; saveEx(); } }),
       h("span", "Title on top"));
-    clear(exportEl, h("div.ex-row", layoutSeg, fill), focus, h("div.ex-row", capt, ttl),
+    const st = state.status?.settings || {};
+    const side = (st.watermark_corner || "bottom-right").split("-")[1];
+    const wmCorner = vertical ? `top ${side}` : (st.watermark_corner || "bottom-right").replace("-", " ");
+    const wm = st.watermark && st.watermark_text && h("p.wm-line", `Adds ${st.watermark_text} small in the ${wmCorner} corner. `,
+      h("button.linkish", { onclick: () => bus.emit("go", { view: "settings" }) }, "Change"));
+    clear(exportEl, h("div.ex-row", layoutSeg, fill), focus, h("div.ex-row", capt, ttl), wm,
       h("div.ex-row", h("button.btn.primary", { onclick: doExport }, "Export clip"),
         h("button.btn", { onclick: () => setStatus(c.status === "kept" ? "new" : "kept") }, icon("check"), c.status === "kept" ? "Kept" : "Keep"),
         h("button.btn.ghost", { onclick: () => setStatus(c.status === "dismissed" ? "new" : "dismissed") }, c.status === "dismissed" ? "Restore" : "Dismiss")),
